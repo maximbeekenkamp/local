@@ -111,10 +111,11 @@ class BinnedSpectralLoss(nn.Module):
         pred_fft = torch.fft.rfft(pred, dim=-1)
         target_fft = torch.fft.rfft(target, dim=-1)
 
-        # Step 2: Compute power spectrum
+        # Step 2: Compute power spectrum (BSP paper Algorithm 1, line 93)
+        # E = (1/2)|û|² for energy per mode
         # Shape: [B, C, T//2+1] complex → [B, C, T//2+1] real
-        pred_energy = torch.abs(pred_fft) ** 2
-        target_energy = torch.abs(target_fft) ** 2
+        pred_energy = 0.5 * torch.abs(pred_fft) ** 2
+        target_energy = 0.5 * torch.abs(target_fft) ** 2
 
         # Step 3: Bin-average energies
         # Shape: [B, C, T//2+1] → [B, C, n_bins]
@@ -123,8 +124,10 @@ class BinnedSpectralLoss(nn.Module):
         target_binned = self._bin_energy_1d(target_energy, T)
 
         # Step 4: Mean Squared Percentage Error per bin
-        # Relative error per bin: (pred - true) / (true + ε)
-        relative_error = (pred_binned - target_binned) / (target_binned + self.epsilon)
+        # BSP paper formula (Algorithm 1, line 99):
+        # L_spec = (1 - (E_pred + ε) / (E_target + ε))²
+        # Adding epsilon to BOTH numerator and denominator is more stable
+        relative_error = 1.0 - (pred_binned + self.epsilon) / (target_binned + self.epsilon)
 
         # Squared error
         squared_error = relative_error ** 2
@@ -194,10 +197,12 @@ class BinnedSpectralLoss(nn.Module):
         freq_no_dc = frequencies[1:]  # [n_freqs-1]
 
         # Find which bin each frequency belongs to
-        # searchsorted returns idx such that bin_edges[idx-1] <= freq < bin_edges[idx]
-        bin_indices = torch.searchsorted(bin_edges[1:], freq_no_dc, right=False)
-        # Clamp to valid range [0, n_bins-1]
-        bin_indices = torch.clamp(bin_indices, 0, self.n_bins - 1)
+        # For n_bins, we have n_bins+1 edges: [e0, e1, ..., e_n]
+        # Bins are: [e0,e1), [e1,e2), ..., [e_{n-1}, e_n]
+        # searchsorted(bin_edges, freq, right=False) returns i where bin_edges[i-1] <= freq < bin_edges[i]
+        # So bin index = i - 1, clamped to [0, n_bins-1]
+        search_idx = torch.searchsorted(bin_edges, freq_no_dc, right=False)
+        bin_indices = torch.clamp(search_idx - 1, 0, self.n_bins - 1)
 
         # Step 4: Average energy per bin using scatter operations
         # energy_no_dc: [B, C, n_freqs-1]
