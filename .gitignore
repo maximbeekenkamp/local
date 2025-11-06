@@ -1,0 +1,11 @@
+.claude/
+.DS_Store
+.pytest_cache
+archive
+checkpoints
+data
+PHASE_5_*.*
+"Reference Code/"
+"Reference Notes/"
+scripts
+tests
