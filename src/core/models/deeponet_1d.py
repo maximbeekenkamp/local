@@ -10,7 +10,7 @@ import torch.nn as nn
 from typing import List, Optional
 
 try:
-    from siren_pytorch import Siren
+    from siren_pytorch import SirenNet
     SIREN_AVAILABLE = True
 except ImportError:
     SIREN_AVAILABLE = False
@@ -50,19 +50,20 @@ class MLP(nn.Module):
 
         self.activation_type = activation.lower()
 
-        # For SIREN, use the Siren module from siren-pytorch
+        # For SIREN, use the SirenNet module from siren-pytorch
         if self.activation_type == 'siren':
             if not SIREN_AVAILABLE:
                 raise ImportError(
                     "siren-pytorch is required for SIREN activation. "
                     "Install with: pip install siren-pytorch"
                 )
-            # Siren module handles its own layers and activations with proper initialization
-            self.network = Siren(
+            # SirenNet handles its own layers and activations with proper initialization
+            self.network = SirenNet(
                 dim_in=in_features,
                 dim_hidden=hidden_layers[0] if hidden_layers else 256,
                 dim_out=out_features,
                 num_layers=len(hidden_layers) + 1,  # hidden layers + output layer
+                final_activation=nn.Identity(),  # No activation on final layer
                 w0_initial=30.0  # Frequency of sinusoid for first layer
             )
         else:
