@@ -5,7 +5,10 @@ archive
 checkpoints
 data
 PHASE_5_*.*
-"Reference Code"
-"Reference Notes"
+Reference */
 scripts
 tests
+
+# Python cache
+__pycache__/
+.ipynb_checkpoints/

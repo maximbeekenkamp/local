@@ -18,11 +18,11 @@ class TrainingConfig:
 
     Attributes:
         # Optimization
-        learning_rate: Initial learning rate (default 1e-3)
+        learning_rate: Initial learning rate (default 3e-3)
         num_epochs: Number of training epochs (default 100)
         batch_size: Batch size for training (default 16)
         weight_decay: L2 regularization weight (default 1e-4)
-        optimizer_type: Type of optimizer ('adam', 'adamw', 'soap', default 'adam')
+        optimizer_type: Type of optimizer ('adam', 'adamw', 'soap', default 'soap')
 
         # SOAP Optimizer Parameters (only used when optimizer_type='soap')
         soap_betas: Beta coefficients for SOAP (default (0.95, 0.95))
@@ -37,7 +37,7 @@ class TrainingConfig:
         # Scheduler
         scheduler_type: Type of LR scheduler ('cosine', 'plateau', or 'none')
         cosine_t_max: T_max for CosineAnnealingLR (default: num_epochs * steps_per_epoch)
-        cosine_eta_min: Minimum LR for cosine annealing (default 1e-6)
+        cosine_eta_min: Minimum LR for cosine annealing (default 0.0, decays to 0)
         plateau_factor: Factor to reduce LR on plateau (default 0.5)
         plateau_patience: Epochs to wait before reducing LR (default 20)
         plateau_min_lr: Minimum LR for plateau scheduler (default 1e-7)
@@ -62,11 +62,11 @@ class TrainingConfig:
     """
 
     # Optimization
-    learning_rate: float = 1e-3
+    learning_rate: float = 3e-3
     num_epochs: int = 100
     batch_size: int = 16
     weight_decay: float = 1e-4
-    optimizer_type: str = 'adam'  # 'adam', 'adamw', or 'soap'
+    optimizer_type: str = 'soap'  # 'adam', 'adamw', or 'soap'
 
     # SOAP Optimizer Parameters (only used when optimizer_type='soap')
     soap_betas: tuple = (0.95, 0.95)
@@ -81,7 +81,7 @@ class TrainingConfig:
     # Scheduler
     scheduler_type: str = 'cosine'  # 'cosine', 'plateau', or 'none'
     cosine_t_max: Optional[int] = None  # Will be set to num_epochs * steps_per_epoch
-    cosine_eta_min: float = 1e-6
+    cosine_eta_min: float = 0.0  # Decay learning rate to 0
     plateau_factor: float = 0.5
     plateau_patience: int = 20
     plateau_min_lr: float = 1e-7
