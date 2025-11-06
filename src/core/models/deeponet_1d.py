@@ -7,17 +7,32 @@ input functions (earthquake accelerations) to output functions (structural displ
 
 import torch
 import torch.nn as nn
-from typing import List
+from typing import List, Optional
+
+try:
+    from siren_pytorch import Siren
+    SIREN_AVAILABLE = True
+except ImportError:
+    SIREN_AVAILABLE = False
 
 
 class MLP(nn.Module):
     """
-    Multi-layer perceptron with configurable hidden layers.
+    Multi-layer perceptron with configurable hidden layers and activation functions.
 
-    Uses Tanh activation for stability in operator learning.
+    Supports:
+    - 'siren': Sinusoidal activation (default, requires siren-pytorch)
+    - 'tanh': Tanh activation (stable for operator learning)
+    - 'relu': ReLU activation
     """
 
-    def __init__(self, in_features: int, out_features: int, hidden_layers: List[int]):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        hidden_layers: List[int],
+        activation: str = 'tanh'
+    ):
         """
         Initialize MLP.
 
@@ -25,22 +40,69 @@ class MLP(nn.Module):
             in_features: Input dimension
             out_features: Output dimension
             hidden_layers: List of hidden layer sizes
+            activation: Activation function type ('tanh', 'relu', 'siren')
+
+        Raises:
+            ValueError: If activation type is not supported
+            ImportError: If siren activation is requested but siren-pytorch not installed
         """
         super().__init__()
 
-        layers = []
-        prev_size = in_features
+        self.activation_type = activation.lower()
 
-        # Hidden layers with Tanh activation
-        for hidden_size in hidden_layers:
-            layers.append(nn.Linear(prev_size, hidden_size))
-            layers.append(nn.Tanh())
-            prev_size = hidden_size
+        # For SIREN, use the Siren module from siren-pytorch
+        if self.activation_type == 'siren':
+            if not SIREN_AVAILABLE:
+                raise ImportError(
+                    "siren-pytorch is required for SIREN activation. "
+                    "Install with: pip install siren-pytorch"
+                )
+            # Siren module handles its own layers and activations with proper initialization
+            self.network = Siren(
+                dim_in=in_features,
+                dim_hidden=hidden_layers[0] if hidden_layers else 256,
+                dim_out=out_features,
+                num_layers=len(hidden_layers) + 1,  # hidden layers + output layer
+                w0_initial=30.0  # Frequency of sinusoid for first layer
+            )
+        else:
+            # Standard MLP with specified activation
+            layers = []
+            prev_size = in_features
 
-        # Output layer (no activation)
-        layers.append(nn.Linear(prev_size, out_features))
+            # Get activation module
+            activation_fn = self._get_activation()
 
-        self.network = nn.Sequential(*layers)
+            # Hidden layers with activation
+            for hidden_size in hidden_layers:
+                layers.append(nn.Linear(prev_size, hidden_size))
+                layers.append(activation_fn())
+                prev_size = hidden_size
+
+            # Output layer (no activation)
+            layers.append(nn.Linear(prev_size, out_features))
+
+            self.network = nn.Sequential(*layers)
+
+    def _get_activation(self) -> nn.Module:
+        """
+        Get activation module based on activation type.
+
+        Returns:
+            Activation module class
+
+        Raises:
+            ValueError: If activation type is not supported
+        """
+        if self.activation_type == 'tanh':
+            return nn.Tanh
+        elif self.activation_type == 'relu':
+            return nn.ReLU
+        else:
+            raise ValueError(
+                f"Unsupported activation: '{self.activation_type}'. "
+                f"Supported: 'tanh', 'relu', 'siren'"
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through MLP."""
@@ -67,7 +129,8 @@ class DeepONet1D(nn.Module):
         sensor_dim: int = 4000,
         latent_dim: int = 100,
         branch_layers: List[int] = None,
-        trunk_layers: List[int] = None
+        trunk_layers: List[int] = None,
+        activation: str = 'siren'
     ):
         """
         Initialize DeepONet1D.
@@ -77,6 +140,7 @@ class DeepONet1D(nn.Module):
             latent_dim: Dimension of latent space (default 100)
             branch_layers: Hidden layer sizes for branch network (default [50, 100])
             trunk_layers: Hidden layer sizes for trunk network (default [100, 100])
+            activation: Activation function type ('tanh', 'relu', 'siren', default 'siren')
         """
         super().__init__()
 
@@ -84,13 +148,15 @@ class DeepONet1D(nn.Module):
         self.latent_dim = latent_dim
         self.branch_layers = branch_layers or [50, 100]
         self.trunk_layers = trunk_layers or [100, 100]
+        self.activation = activation
 
         # Branch network: processes input function
         # Input: [batch, sensor_dim] → Output: [batch, latent_dim]
         self.branch = MLP(
             in_features=sensor_dim,
             out_features=latent_dim,
-            hidden_layers=self.branch_layers
+            hidden_layers=self.branch_layers,
+            activation=activation
         )
 
         # Trunk network: processes query coordinates
@@ -98,7 +164,8 @@ class DeepONet1D(nn.Module):
         self.trunk = MLP(
             in_features=1,  # Single coordinate (time)
             out_features=latent_dim,
-            hidden_layers=self.trunk_layers
+            hidden_layers=self.trunk_layers,
+            activation=activation
         )
 
         # Query points: uniform grid [0, 1]

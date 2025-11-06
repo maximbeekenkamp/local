@@ -27,6 +27,7 @@ from rich.progress import (
 )
 from rich.console import Console
 
+from .optimizers.optimizer_factory import create_optimizer
 from ..evaluation.metrics import (
     RelativeL2Loss,
     compute_field_error,
@@ -97,11 +98,11 @@ class SimpleTrainer:
         # Loss function (required parameter)
         self.criterion = create_loss(loss_config)
 
-        # Optimizer
-        self.optimizer = Adam(
-            self.model.parameters(),
-            lr=config.learning_rate,
-            weight_decay=config.weight_decay
+        # Optimizer - created via factory to support adam, adamw, soap
+        self.optimizer = create_optimizer(
+            optimizer_type=config.optimizer_type,
+            model_parameters=self.model.parameters(),
+            config=config
         )
 
         # Weight optimizer for SA-BSP loss (if applicable)

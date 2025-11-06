@@ -5,7 +5,7 @@ archive
 checkpoints
 data
 PHASE_5_*.*
-"Reference Code/"
-"Reference Notes/"
+"Reference Code"
+"Reference Notes"
 scripts
 tests

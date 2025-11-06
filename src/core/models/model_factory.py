@@ -64,6 +64,7 @@ def _create_deeponet(config: Dict[str, Any]) -> DeepONet1D:
                 - latent_dim: Latent space dimension (default 100)
                 - branch_layers: Branch network hidden layers (default [50, 100])
                 - trunk_layers: Trunk network hidden layers (default [100, 100])
+                - activation: Activation function ('tanh', 'relu', 'siren', default 'siren')
 
     Returns:
         Initialized DeepONet1D model
@@ -73,7 +74,8 @@ def _create_deeponet(config: Dict[str, Any]) -> DeepONet1D:
         'sensor_dim': 4000,
         'latent_dim': 100,
         'branch_layers': [50, 100],
-        'trunk_layers': [100, 100]
+        'trunk_layers': [100, 100],
+        'activation': 'siren'  # Default to SIREN activation
     }
 
     # Merge with user config

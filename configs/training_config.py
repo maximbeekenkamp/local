@@ -22,6 +22,17 @@ class TrainingConfig:
         num_epochs: Number of training epochs (default 100)
         batch_size: Batch size for training (default 16)
         weight_decay: L2 regularization weight (default 1e-4)
+        optimizer_type: Type of optimizer ('adam', 'adamw', 'soap', default 'adam')
+
+        # SOAP Optimizer Parameters (only used when optimizer_type='soap')
+        soap_betas: Beta coefficients for SOAP (default (0.95, 0.95))
+        soap_shampoo_beta: Beta for preconditioner moving average (default -1, uses betas[1])
+        soap_eps: Epsilon for numerical stability (default 1e-8)
+        soap_precondition_frequency: How often to update preconditioner (default 10)
+        soap_max_precond_dim: Maximum preconditioner dimension (default 10000)
+        soap_merge_dims: Whether to merge dimensions (default False)
+        soap_precondition_1d: Whether to precondition 1D gradients (default False)
+        soap_normalize_grads: Whether to normalize gradients per layer (default False)
 
         # Scheduler
         scheduler_type: Type of LR scheduler ('cosine', 'plateau', or 'none')
@@ -55,6 +66,17 @@ class TrainingConfig:
     num_epochs: int = 100
     batch_size: int = 16
     weight_decay: float = 1e-4
+    optimizer_type: str = 'adam'  # 'adam', 'adamw', or 'soap'
+
+    # SOAP Optimizer Parameters (only used when optimizer_type='soap')
+    soap_betas: tuple = (0.95, 0.95)
+    soap_shampoo_beta: float = -1.0  # -1 means use betas[1]
+    soap_eps: float = 1e-8
+    soap_precondition_frequency: int = 10
+    soap_max_precond_dim: int = 10000
+    soap_merge_dims: bool = False
+    soap_precondition_1d: bool = False
+    soap_normalize_grads: bool = False
 
     # Scheduler
     scheduler_type: str = 'cosine'  # 'cosine', 'plateau', or 'none'
@@ -145,6 +167,14 @@ class TrainingConfig:
         if self.batch_size <= 0:
             raise ValueError(f"batch_size must be positive, got {self.batch_size}")
 
+        # Check optimizer type
+        valid_optimizers = ['adam', 'adamw', 'soap']
+        if self.optimizer_type not in valid_optimizers:
+            raise ValueError(
+                f"optimizer_type must be one of {valid_optimizers}, "
+                f"got '{self.optimizer_type}'"
+            )
+
         # Check scheduler type
         valid_schedulers = ['cosine', 'plateau', 'none']
         if self.scheduler_type not in valid_schedulers:
@@ -175,6 +205,7 @@ class TrainingConfig:
         return (
             f"TrainingConfig(\n"
             f"  Optimization:\n"
+            f"    optimizer_type='{self.optimizer_type}',\n"
             f"    learning_rate={self.learning_rate},\n"
             f"    num_epochs={self.num_epochs},\n"
             f"    batch_size={self.batch_size},\n"
