@@ -171,7 +171,7 @@ BSP_CONFIG = LossConfig(
         'spectral_loss': 'bsp',
         'lambda_spectral': 1.0,
         'n_bins': 32,
-        'epsilon': 1e-8,
+        'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
         'binning_mode': 'linear'
     },
     description='MSE + Binned Spectral Power loss'
@@ -186,7 +186,7 @@ SA_BSP_CONFIG = LossConfig(
         'n_bins': 32,
         'adapt_mode': 'per-bin',
         'init_weight': 1.0,
-        'epsilon': 1e-8,
+        'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
         'binning_mode': 'linear'
     },
     description='MSE + Self-Adaptive BSP loss'

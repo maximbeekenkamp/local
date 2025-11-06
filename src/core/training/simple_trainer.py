@@ -211,6 +211,10 @@ class SimpleTrainer:
 
             # Backward pass
             loss.backward()
+
+            # Gradient clipping for numerical stability (prevents gradient explosion)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+
             self.optimizer.step()
             if self.weight_optimizer is not None:
                 self.weight_optimizer.step()

@@ -142,9 +142,10 @@ class BinnedSpectralLoss(nn.Module):
         T: int
     ) -> torch.Tensor:
         """
-        Bin-average energy spectrum into frequency bands (1D).
+        Bin-average energy spectrum using HARD binning (BSP paper Algorithm 1).
 
-        Uses differentiable soft binning for gradient flow.
+        Each frequency belongs to exactly ONE bin based on bin edges.
+        Matches paper: E_u^bin(c,i) ← (1/N_i * sum_{k in bin_i} E_u(c,k))
 
         Args:
             energy: Power spectrum [B, C, T//2+1]
@@ -153,11 +154,11 @@ class BinnedSpectralLoss(nn.Module):
         Returns:
             Binned energy [B, C, n_bins]
 
-        Algorithm:
+        Algorithm (BSP paper Algorithm 1):
             1. Compute frequency values for each FFT bin
             2. Create bin edges based on binning_mode
-            3. Soft-assign each frequency to bins using triangular weights
-            4. Average energy within each bin (weighted mean)
+            3. HARD-assign each frequency to exactly ONE bin
+            4. Average energy within each bin (mean over frequencies in bin)
         """
         B, C, n_freqs = energy.shape
         device = energy.device
@@ -188,37 +189,40 @@ class BinnedSpectralLoss(nn.Module):
                 device=device, dtype=dtype
             )
 
-        # Step 3: Compute bin centers
-        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2  # [n_bins]
+        # Step 3: HARD BINNING - assign each frequency to exactly one bin
+        # frequencies[1:] to skip DC component
+        freq_no_dc = frequencies[1:]  # [n_freqs-1]
 
-        # Step 4: Soft binning with triangular weights
-        # For each frequency, compute soft assignment to neighboring bins
-        # Shape: [n_freqs, 1] vs [1, n_bins] → [n_freqs, n_bins]
-        freq_expanded = frequencies[1:].unsqueeze(1)  # Skip DC, [n_freqs-1, 1]
-        centers_expanded = bin_centers.unsqueeze(0)  # [1, n_bins]
+        # Find which bin each frequency belongs to
+        # searchsorted returns idx such that bin_edges[idx-1] <= freq < bin_edges[idx]
+        bin_indices = torch.searchsorted(bin_edges[1:], freq_no_dc, right=False)
+        # Clamp to valid range [0, n_bins-1]
+        bin_indices = torch.clamp(bin_indices, 0, self.n_bins - 1)
 
-        # Compute distance to bin centers
-        distances = torch.abs(freq_expanded - centers_expanded)  # [n_freqs-1, n_bins]
+        # Step 4: Average energy per bin using scatter operations
+        # energy_no_dc: [B, C, n_freqs-1]
+        energy_no_dc = energy[:, :, 1:]  # Skip DC component
 
-        # Triangular weight: 1 - (distance / bin_width)
-        # Clip to [0, 1] so only nearby bins contribute
-        bin_width = bin_edges[1] - bin_edges[0]  # Assume uniform for simplicity
-        weights = torch.clamp(1.0 - distances / bin_width, min=0.0)  # [n_freqs-1, n_bins]
+        # Initialize binned energy [B, C, n_bins]
+        binned_energy = torch.zeros(B, C, self.n_bins, device=device, dtype=dtype)
 
-        # Normalize weights so they sum to 1 per frequency
-        # Shape: [n_freqs-1, n_bins]
-        weights = weights / (weights.sum(dim=1, keepdim=True) + 1e-10)
+        # Count frequencies per bin [n_bins]
+        bin_counts = torch.zeros(self.n_bins, device=device, dtype=dtype)
 
-        # Step 5: Weighted average energy per bin
-        # energy: [B, C, n_freqs]
-        # weights: [n_freqs-1, n_bins]
-        # We skip DC component (index 0) in energy
-        energy_no_dc = energy[:, :, 1:]  # [B, C, n_freqs-1]
+        # Expand bin_indices to match energy shape [B, C, n_freqs-1]
+        bin_indices_expanded = bin_indices.unsqueeze(0).unsqueeze(0).expand(B, C, -1)
 
-        # Matrix multiply: [B, C, n_freqs-1] @ [n_freqs-1, n_bins] → [B, C, n_bins]
-        # Use einsum for clarity
-        # 'b' = batch, 'c' = channels, 'f' = frequencies, 'n' = n_bins
-        binned_energy = torch.einsum('bcf,fn->bcn', energy_no_dc, weights)
+        # Sum energy in each bin
+        # binned_energy[b, c, bin_indices[f]] += energy_no_dc[b, c, f]
+        binned_energy.scatter_add_(2, bin_indices_expanded, energy_no_dc)
+
+        # Count frequencies per bin
+        bin_counts.scatter_add_(0, bin_indices, torch.ones_like(freq_no_dc))
+
+        # Average by dividing by count: (1/N_i) * sum_{k in bin_i} E(k)
+        # Add epsilon to avoid division by zero for empty bins
+        bin_counts = bin_counts.unsqueeze(0).unsqueeze(0)  # [1, 1, n_bins]
+        binned_energy = binned_energy / (bin_counts + 1e-10)
 
         return binned_energy
 

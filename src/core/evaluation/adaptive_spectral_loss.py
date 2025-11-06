@@ -123,8 +123,13 @@ class SelfAdaptiveWeights(nn.Module):
         Shape:
             Output: [n_components]
         """
+        # Clip log_weights to prevent explosion
+        # exp(5) ≈ 148, exp(-5) ≈ 0.0067
+        # Allows adaptive range of ~22,000x while preventing overflow
+        log_weights_clipped = torch.clamp(self.log_weights, min=-5.0, max=5.0)
+
         # Exponentiate to ensure positivity
-        return torch.exp(self.log_weights)
+        return torch.exp(log_weights_clipped)
 
     def get_statistics(self) -> dict:
         """
