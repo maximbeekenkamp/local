@@ -241,8 +241,9 @@ class SelfAdaptiveBSPLoss(nn.Module):
         # Shape: [n_bins]
         bin_errors = self.bsp_module.compute_bin_errors(pred, target)
 
-        # Step 2: Get adaptive weights
+        # Step 2: Get adaptive weights and ensure they're on the same device as bin_errors
         weights = self.adaptive_weights()  # [n_components]
+        weights = weights.to(bin_errors.device)  # Ensure same device
 
         # Step 3: Apply adaptive weighting based on mode
         if self.adapt_mode == 'per-bin':
@@ -295,6 +296,7 @@ class SelfAdaptiveBSPLoss(nn.Module):
             # Compute components
             bin_errors = self.bsp_module.compute_bin_errors(pred, target)
             weights = self.adaptive_weights()
+            weights = weights.to(bin_errors.device)  # Ensure same device
 
             # Apply weighting
             if self.adapt_mode == 'per-bin':
@@ -343,6 +345,7 @@ class SelfAdaptiveBSPLoss(nn.Module):
         # Add adaptive weight information
         with torch.no_grad():
             weights = self.adaptive_weights()
+            weights = weights.to(pred.device)  # Ensure same device
             weight_stats = self.adaptive_weights.get_statistics()
 
             analysis['adaptive_weights'] = weights.cpu().numpy()
