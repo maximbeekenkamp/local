@@ -169,7 +169,7 @@ BSP_CONFIG = LossConfig(
     loss_params={
         'base_loss': 'relative_l2',
         'spectral_loss': 'bsp',
-        'lambda_spectral': 1.0,
+        'lambda_spectral': 0.1,  # Paper's Airfoil value (Table 4, Page 26)
         'n_bins': 32,
         'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
         'binning_mode': 'linear'
@@ -182,7 +182,7 @@ SA_BSP_CONFIG = LossConfig(
     loss_params={
         'base_loss': 'relative_l2',
         'spectral_loss': 'sa_bsp',
-        'lambda_spectral': 1.0,
+        'lambda_spectral': 0.1,  # Paper's Airfoil value (Table 4, Page 26)
         'n_bins': 32,
         'adapt_mode': 'per-bin',
         'init_weight': 1.0,
