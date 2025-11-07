@@ -76,11 +76,36 @@ class CombinedLoss(nn.Module):
 
         Returns:
             Scalar loss value
+
+        Note:
+            For SA-BSP global/combined modes with competitive dynamics,
+            weights are applied directly to MSE and BSP terms rather than
+            using lambda_spectral.
         """
+        # Import here to avoid circular dependency
+        from .adaptive_spectral_loss import SelfAdaptiveBSPLoss
+
         loss_base = self.base_loss(pred, target)
         loss_spectral = self.spectral_loss(pred, target)
 
-        total_loss = loss_base + self.lambda_spectral * loss_spectral
+        # Check if using SA-BSP global or combined mode (competitive dynamics for MSE/BSP)
+        if isinstance(self.spectral_loss, SelfAdaptiveBSPLoss):
+            adapt_mode = self.spectral_loss.adapt_mode
+
+            if adapt_mode in ['global', 'combined']:
+                # Global/Combined: Apply adaptive weights to both MSE and BSP
+                # weights[0] = w_mse, weights[1] = w_bsp (for global)
+                # weights[0] = w_mse, weights[1:] = w_bsp + per-bin (for combined)
+                weights = self.spectral_loss.adaptive_weights()
+                w_mse = weights[0]
+                # Spectral loss already has w_bsp applied in its forward pass
+                total_loss = w_mse * loss_base + self.lambda_spectral * loss_spectral
+            else:
+                # Per-bin mode: Standard formulation (MSE fixed, only BSP adaptive)
+                total_loss = loss_base + self.lambda_spectral * loss_spectral
+        else:
+            # Standard BSP or other spectral losses
+            total_loss = loss_base + self.lambda_spectral * loss_spectral
 
         return total_loss
 
@@ -99,9 +124,23 @@ class CombinedLoss(nn.Module):
         Returns:
             Dictionary with 'base', 'spectral', and 'total' losses
         """
+        # Import here to avoid circular dependency
+        from .adaptive_spectral_loss import SelfAdaptiveBSPLoss
+
         loss_base = self.base_loss(pred, target)
         loss_spectral = self.spectral_loss(pred, target)
-        total_loss = loss_base + self.lambda_spectral * loss_spectral
+
+        # Apply same logic as forward() for global/combined modes
+        if isinstance(self.spectral_loss, SelfAdaptiveBSPLoss):
+            adapt_mode = self.spectral_loss.adapt_mode
+            if adapt_mode in ['global', 'combined']:
+                weights = self.spectral_loss.adaptive_weights()
+                w_mse = weights[0]
+                total_loss = w_mse * loss_base + self.lambda_spectral * loss_spectral
+            else:
+                total_loss = loss_base + self.lambda_spectral * loss_spectral
+        else:
+            total_loss = loss_base + self.lambda_spectral * loss_spectral
 
         return {
             'base': loss_base,

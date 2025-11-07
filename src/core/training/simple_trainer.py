@@ -153,14 +153,17 @@ class SimpleTrainer:
         """
         Update adaptive weights using SA-PINNs style optimization.
 
-        Applies gradient negation based on adapt_mode:
-        - 'per-bin': Negate ALL weight gradients (ascent on loss to emphasize hard bins)
-        - 'global': Standard gradients (descent on loss for MSE/BSP balance)
-        - 'hierarchical': Negate per-bin gradients (indices 1:), keep global standard (index 0)
+        Applies gradient negation (ascent) based on adapt_mode for competitive dynamics:
+        - 'per-bin': Negate ALL gradients (32 frequency weights compete)
+        - 'global': Negate ALL gradients (w_mse and w_bsp compete for MSE/BSP balance)
+        - 'combined': Negate ALL gradients (w_mse, w_bsp, and per-bin weights all compete)
 
         This implements the saddle-point optimization from SA-PINNs paper:
         - Model: min_θ L(θ, λ) (standard gradient descent)
-        - Weights: max_λ L(θ, λ) (gradient ascent via negated gradients)
+        - Weights: max_λ L(θ, λ) (gradient ascent via negated gradients for competitive dynamics)
+
+        Competitive dynamics prevent weight collapse by making weights maximize the loss they weight.
+        Weights naturally find equilibrium where harder-to-fit losses get higher emphasis.
         """
         if self.weight_optimizer is None:
             return
@@ -169,26 +172,31 @@ class SimpleTrainer:
         adaptive_params = list(self.criterion.spectral_loss.adaptive_weights.parameters())
 
         if self.adapt_mode == 'per-bin':
-            # SA-PINNs style: NEGATE all gradients for per-bin weights
-            # This performs gradient ascent on the loss, increasing weights for
-            # difficult frequency bins (typically high frequencies)
+            # SA-PINNs style: NEGATE all gradients (ascent on loss)
+            # Weights for high-error frequency bins increase, creating competitive emphasis
+            # on difficult-to-fit frequencies (typically high frequencies due to spectral bias)
             for param in adaptive_params:
                 if param.grad is not None:
                     param.grad = -param.grad
 
         elif self.adapt_mode == 'global':
-            # Standard gradients (no negation)
-            # Global weight balances MSE vs BSP, should minimize total loss
-            pass
-
-        elif self.adapt_mode == 'hierarchical':
-            # Mixed approach: global uses standard, per-bin uses negated
-            # weights[0] = global weight (standard gradient)
-            # weights[1:] = per-bin weights (negated gradients)
+            # Competitive dynamics for MSE/BSP balance
+            # weights[0] = w_mse (MSE weight)
+            # weights[1] = w_bsp (BSP weight)
+            # Both use negated gradients (ascent) to learn which is harder to satisfy
             for param in adaptive_params:
                 if param.grad is not None:
-                    # Negate all except first element (global weight)
-                    param.grad[1:] = -param.grad[1:]
+                    param.grad = -param.grad
+
+        elif self.adapt_mode == 'combined':
+            # Full competitive dynamics: all weights compete
+            # weights[0] = w_mse (ascent: maximize loss w.r.t. MSE weight)
+            # weights[1] = w_bsp (ascent: maximize loss w.r.t. global BSP weight)
+            # weights[2:] = per-bin weights (ascent: maximize loss per frequency bin)
+            # Result: weights find equilibrium emphasizing hard losses
+            for param in adaptive_params:
+                if param.grad is not None:
+                    param.grad = -param.grad
 
         # Update weights with (possibly negated) gradients
         self.weight_optimizer.step()

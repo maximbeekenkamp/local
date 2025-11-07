@@ -78,7 +78,7 @@ class SelfAdaptiveWeights(nn.Module):
 
     Attributes:
         n_components: Number of weight components (e.g., n_bins for per-bin mode)
-        mode: Weight adaptation mode ('per-bin', 'global', 'hierarchical', 'none')
+        mode: Weight adaptation mode ('per-bin', 'global', 'combined', 'none')
         weights: Trainable weights (parameters)
     """
 
@@ -95,12 +95,12 @@ class SelfAdaptiveWeights(nn.Module):
             n_components: Number of weight components
                 - For 'per-bin': n_components = n_bins
                 - For 'global': n_components = 1
-                - For 'hierarchical': n_components = n_bins + 1
+                - For 'combined': n_components = n_bins + 2
                 - For 'none': No parameters (fixed weights)
             mode: Weight adaptation strategy
                 - 'per-bin': Independent weight per frequency bin (default)
                 - 'global': Single weight for MSE/BSP balance
-                - 'hierarchical': Global weight × per-bin weights
+                - 'combined': Global MSE/BSP balance × per-bin frequency weights
                 - 'none': Fixed unit weights (equivalent to BSP)
             init_value: Initial weight value (default: 1.0)
 
@@ -113,7 +113,7 @@ class SelfAdaptiveWeights(nn.Module):
         self.n_components = n_components
         self.mode = mode
 
-        valid_modes = ['per-bin', 'global', 'hierarchical', 'none']
+        valid_modes = ['per-bin', 'global', 'combined', 'none']
         if mode not in valid_modes:
             raise ValueError(f"mode must be one of {valid_modes}, got {mode}")
 
@@ -199,8 +199,8 @@ class SelfAdaptiveBSPLoss(nn.Module):
             lambda_sa: Overall weight for SA-BSP loss (default: 1.0)
             adapt_mode: Weight adaptation mode (default: 'per-bin')
                 - 'per-bin': Independent weight per bin (32 weights)
-                - 'global': Single weight for MSE/BSP balance (1 weight)
-                - 'hierarchical': Global × per-bin (33 weights: 1 global + 32 per-bin)
+                - 'global': Dual weights for MSE/BSP balance (2 weights: w_mse + w_bsp)
+                - 'combined': MSE/BSP balance + per-bin (34 weights: w_mse + w_bsp + 32 per-bin)
                 - 'none': Fixed unit weights (degenerates to BSP)
             init_weight: Initial weight value (default: 1.0)
             epsilon: Numerical stability constant (default: 1e-8)
@@ -227,9 +227,9 @@ class SelfAdaptiveBSPLoss(nn.Module):
 
         # Create adaptive weights
         if adapt_mode == 'global':
-            n_components = 1
-        elif adapt_mode == 'hierarchical':
-            n_components = n_bins + 1  # 1 global + n_bins per-bin
+            n_components = 2  # [w_mse, w_bsp] for competitive dynamics
+        elif adapt_mode == 'combined':
+            n_components = n_bins + 2  # [w_mse, w_bsp, w1, w2, ..., w_n_bins] for full competitive dynamics
         else:  # 'per-bin' or 'none'
             n_components = n_bins
 
@@ -268,25 +268,28 @@ class SelfAdaptiveBSPLoss(nn.Module):
         if self.adapt_mode == 'per-bin':
             # Direct per-bin weighting
             # weights: [n_bins], bin_errors: [n_bins]
-            # Uses SA-PINNs style: emphasize high-error bins
+            # Uses SA-PINNs style: emphasize high-error bins via competitive dynamics
             weighted_errors = weights * bin_errors
             sa_bsp_loss = weighted_errors.mean()
 
         elif self.adapt_mode == 'global':
-            # Single global weight for MSE/BSP balance
-            # weights: [1], bin_errors: [n_bins]
-            # Sum all bin errors first, then multiply by global weight
+            # Competitive dynamics for MSE/BSP balance
+            # weights: [2] = [w_mse, w_bsp]
+            # Returns only BSP component; CombinedLoss applies both weights
             total_bsp = bin_errors.mean()
-            sa_bsp_loss = weights[0] * total_bsp
+            sa_bsp_loss = weights[1] * total_bsp
+            # Note: w_mse (weights[0]) is applied in CombinedLoss for MSE term
 
-        elif self.adapt_mode == 'hierarchical':
-            # Hierarchical: global × per-bin
-            # weights: [n_bins+1] where weights[0] = global, weights[1:] = per-bin
-            # Global weight uses standard optimization, per-bin uses negated gradients
-            global_weight = weights[0]
-            per_bin_weights = weights[1:]
-            weighted_errors = global_weight * per_bin_weights * bin_errors
-            sa_bsp_loss = weighted_errors.mean()
+        elif self.adapt_mode == 'combined':
+            # Combined: Global MSE/BSP balance + per-bin frequency emphasis
+            # weights: [n_bins+2] = [w_mse, w_bsp, w1, w2, ..., w_n_bins]
+            # All weights use competitive dynamics (negated gradients)
+            w_mse = weights[0]     # Not used here, applied in CombinedLoss
+            w_bsp = weights[1]     # Global BSP weight
+            per_bin_weights = weights[2:]  # Per-bin weights
+            # Apply: w_bsp * mean(per_bin_weights * bin_errors)
+            weighted_errors = per_bin_weights * bin_errors
+            sa_bsp_loss = w_bsp * weighted_errors.mean()
 
         else:  # 'none'
             # No adaptation, uniform weighting (equivalent to BSP)

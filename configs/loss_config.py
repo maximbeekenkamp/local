@@ -75,8 +75,8 @@ class LossConfig:
             - lambda_sa (float): Weight for adaptive spectral loss (default: 1.0)
             - adapt_mode (str): Weight adaptation mode (default: 'per-bin')
                 * 'per-bin': Independent weight per bin (32 weights)
-                * 'global': Single weight for MSE/BSP balance (1 weight)
-                * 'hierarchical': Global × per-bin (33 weights: 1 global + 32 per-bin)
+                * 'global': Dual weights for MSE/BSP balance (2 weights: w_mse + w_bsp)
+                * 'combined': Global MSE/BSP balance + per-bin (34 weights: w_mse + w_bsp + 32 per-bin)
                 * 'none': Fixed unit weights (equivalent to BSP)
             - init_weight (float): Initial weight value (default: 1.0)
             - epsilon (float): Numerical stability constant (default: 1e-8)
@@ -126,7 +126,7 @@ class LossConfig:
                (self.loss_type == 'combined' and
                 self.loss_params.get('spectral_loss') == 'sa_bsp'):
                 adapt_mode = self.loss_params.get('adapt_mode', 'per-bin')
-                valid_modes = ['per-bin', 'global', 'hierarchical', 'none']
+                valid_modes = ['per-bin', 'global', 'combined', 'none']
                 if adapt_mode not in valid_modes:
                     raise ValueError(
                         f"Invalid adapt_mode: {adapt_mode}. "
@@ -199,27 +199,27 @@ SA_BSP_GLOBAL_CONFIG = LossConfig(
         'spectral_loss': 'sa_bsp',
         'lambda_spectral': 0.1,  # Paper's Airfoil value (Table 4, Page 26)
         'n_bins': 32,
-        'adapt_mode': 'global',  # 1 trainable weight for MSE/BSP balance
+        'adapt_mode': 'global',  # 2 trainable weights (w_mse + w_bsp) for MSE/BSP balance
         'init_weight': 1.0,
         'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
         'binning_mode': 'linear'
     },
-    description='MSE + SA-BSP (global): 1 adaptive weight with standard gradients'
+    description='MSE + SA-BSP (global): 2 adaptive weights (w_mse + w_bsp) with negated gradients'
 )
 
-SA_BSP_HIERARCHICAL_CONFIG = LossConfig(
+SA_BSP_COMBINED_CONFIG = LossConfig(
     loss_type='combined',
     loss_params={
         'base_loss': 'relative_l2',
         'spectral_loss': 'sa_bsp',
         'lambda_spectral': 0.1,  # Paper's Airfoil value (Table 4, Page 26)
         'n_bins': 32,
-        'adapt_mode': 'hierarchical',  # 33 weights: 1 global + 32 per-bin
+        'adapt_mode': 'combined',  # 34 weights: w_mse + w_bsp + 32 per-bin
         'init_weight': 1.0,
         'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
         'binning_mode': 'linear'
     },
-    description='MSE + SA-BSP (hierarchical): 33 weights (global standard + per-bin negated)'
+    description='MSE + SA-BSP (combined): 34 weights (w_mse + w_bsp + 32 per-bin, all negated gradients)'
 )
 
 # Legacy alias for backward compatibility
