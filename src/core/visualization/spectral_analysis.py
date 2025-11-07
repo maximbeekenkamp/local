@@ -12,6 +12,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Dict, Tuple, Optional, List
 from pathlib import Path
+from configs.visualization_config import N_BINS_VISUALIZATION, SPECTRUM_CACHE_FILENAME, CACHE_DIR
 
 
 def compute_cached_true_spectrum(
@@ -236,13 +237,13 @@ def plot_spectral_bias_comparison(
     fig, ax = plt.subplots(figsize=figsize)
 
     # Plot ground truth using cached spectrum from ALL data
-    # Always use 64 bins for smooth, high-resolution visualization (independent of n_bins parameter)
-    cache_dir = Path(save_path).parent / 'cache' if save_path else Path('cache')
-    cache_path = cache_dir / 'true_spectrum_64bins.npz'
+    # Always use N_BINS_VISUALIZATION for smooth, high-resolution visualization (independent of n_bins parameter)
+    cache_dir = Path(save_path).parent / CACHE_DIR if save_path else Path(CACHE_DIR)
+    cache_path = cache_dir / SPECTRUM_CACHE_FILENAME
     freq_gt, mean_gt = compute_cached_true_spectrum(
         ground_truth,
         cache_path=str(cache_path),
-        n_bins=64  # High resolution for smooth visualization
+        n_bins=N_BINS_VISUALIZATION  # High resolution for smooth visualization
     )
 
     ax.plot(freq_gt, mean_gt, 'k-', linewidth=2, label='True', zorder=10)

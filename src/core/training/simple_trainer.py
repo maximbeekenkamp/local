@@ -115,6 +115,10 @@ class SimpleTrainer:
             )
             # Store adapt_mode for SA-PINNs style optimization
             self.adapt_mode = self.criterion.spectral_loss.adapt_mode
+            # Flag for FFT mode: uses spectral-domain weight optimization
+            self.use_spectral_optimizer = (self.adapt_mode == 'fft')
+        else:
+            self.use_spectral_optimizer = False
 
         # Scheduler setup
         self.scheduler = self._create_scheduler()
@@ -157,6 +161,7 @@ class SimpleTrainer:
         - 'per-bin': Negate ALL gradients (32 frequency weights compete)
         - 'global': Negate ALL gradients (w_mse and w_bsp compete for MSE/BSP balance)
         - 'combined': Negate ALL gradients (w_mse, w_bsp, and per-bin weights all compete)
+        - 'fft': Negate ALL gradients (32 frequency weights, optimized in spectral domain)
 
         This implements the saddle-point optimization from SA-PINNs paper:
         - Model: min_θ L(θ, λ) (standard gradient descent)
@@ -194,6 +199,15 @@ class SimpleTrainer:
             # weights[1] = w_bsp (ascent: maximize loss w.r.t. global BSP weight)
             # weights[2:] = per-bin weights (ascent: maximize loss per frequency bin)
             # Result: weights find equilibrium emphasizing hard losses
+            for param in adaptive_params:
+                if param.grad is not None:
+                    param.grad = -param.grad
+
+        elif self.adapt_mode == 'fft':
+            # FFT mode: Spectral-domain weight optimization
+            # Weights optimize using ONLY spectral loss (not combined loss)
+            # 32 per-bin weights use negated gradients (ascent on spectral loss)
+            # Model sees combined loss, weights see only BSP for pure spectral adaptation
             for param in adaptive_params:
                 if param.grad is not None:
                     param.grad = -param.grad
@@ -265,16 +279,30 @@ class SimpleTrainer:
             loss = self.criterion(outputs, targets)
 
             # Backward pass
-            loss.backward()
+            if self.use_spectral_optimizer:
+                # FFT mode: Model sees combined loss, weights see only spectral loss
+                # Step 1: Model update with combined loss
+                loss.backward(retain_graph=True)  # Keep graph for weight update
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                self.optimizer.step()
 
-            # Gradient clipping for numerical stability (prevents gradient explosion)
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-
-            # Update model parameters (standard gradient descent)
-            self.optimizer.step()
-
-            # Update adaptive weights (SA-PINNs style with negated gradients)
-            self._update_adaptive_weights()
+                # Step 2: Weight update with spectral loss only
+                self.weight_optimizer.zero_grad()
+                # Recompute spectral loss component
+                from ..evaluation.loss_factory import CombinedLoss
+                if isinstance(self.criterion, CombinedLoss):
+                    # Get spectral loss component
+                    loss_spectral = self.criterion.spectral_loss(outputs, targets)
+                    loss_spectral.backward()
+                    # Apply negated gradients (SA-PINNs style)
+                    self._update_adaptive_weights()
+            else:
+                # Standard mode: Single backward pass for both model and weights
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                self.optimizer.step()
+                # Update adaptive weights (SA-PINNs style with negated gradients)
+                self._update_adaptive_weights()
 
             # Step scheduler (for cosine annealing, step every batch)
             if self.config.scheduler_type == 'cosine':

@@ -126,7 +126,7 @@ class LossConfig:
                (self.loss_type == 'combined' and
                 self.loss_params.get('spectral_loss') == 'sa_bsp'):
                 adapt_mode = self.loss_params.get('adapt_mode', 'per-bin')
-                valid_modes = ['per-bin', 'global', 'combined', 'none']
+                valid_modes = ['per-bin', 'global', 'combined', 'fft', 'none']
                 if adapt_mode not in valid_modes:
                     raise ValueError(
                         f"Invalid adapt_mode: {adapt_mode}. "
@@ -220,6 +220,21 @@ SA_BSP_COMBINED_CONFIG = LossConfig(
         'binning_mode': 'linear'
     },
     description='MSE + SA-BSP (combined): 34 weights (w_mse + w_bsp + 32 per-bin, all negated gradients)'
+)
+
+SA_BSP_FFT_CONFIG = LossConfig(
+    loss_type='combined',
+    loss_params={
+        'base_loss': 'relative_l2',
+        'spectral_loss': 'sa_bsp',
+        'lambda_spectral': 0.1,  # Paper's Airfoil value (Table 4, Page 26)
+        'n_bins': 32,
+        'adapt_mode': 'fft',  # Spectral-domain weight optimization
+        'init_weight': 1.0,
+        'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
+        'binning_mode': 'linear'
+    },
+    description='MSE + SA-BSP (FFT): 32 weights optimized in spectral domain with negated gradients'
 )
 
 # Legacy alias for backward compatibility

@@ -279,8 +279,9 @@ class BinnedSpectralLoss(nn.Module):
         # Compute FFT and power spectrum
         pred_fft = torch.fft.rfft(pred, dim=-1)
         target_fft = torch.fft.rfft(target, dim=-1)
-        pred_energy = torch.abs(pred_fft) ** 2
-        target_energy = torch.abs(target_fft) ** 2
+        # Use 0.5 factor to match forward() method (BSP paper Algorithm 1, line 93)
+        pred_energy = 0.5 * torch.abs(pred_fft) ** 2
+        target_energy = 0.5 * torch.abs(target_fft) ** 2
 
         # Bin energies
         T = pred.shape[-1]
@@ -295,7 +296,8 @@ class BinnedSpectralLoss(nn.Module):
         target_binned_norm = target_binned / target_total
 
         # Relative error per bin (now scale-invariant!)
-        relative_error = (pred_binned_norm - target_binned_norm) / (target_binned_norm + self.epsilon)
+        # Use same formula as forward() method for consistency
+        relative_error = 1.0 - (pred_binned_norm + self.epsilon) / (target_binned_norm + self.epsilon)
         squared_error = relative_error ** 2
 
         # Average over batch and channels: [B, C, n_bins] → [n_bins]
