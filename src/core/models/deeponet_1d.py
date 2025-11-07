@@ -214,13 +214,6 @@ class DeepONet1D(nn.Module):
         # Sum over latent dimension: [batch, sensor_dim, latent_dim] → [batch, sensor_dim]
         output = combined.sum(dim=-1)
 
-        # Normalize output to unit RMS for stable spectral losses
-        # RMS scaling preserves frequency content better than LayerNorm
-        # which removes DC component (shifts mean to 0)
-        # [batch, sensor_dim] → [batch, 1] → [batch, sensor_dim]
-        output_rms = torch.sqrt(torch.mean(output ** 2, dim=-1, keepdim=True) + 1e-8)
-        output = output / (output_rms + 1e-8)
-
         # Add channel dimension: [batch, sensor_dim] → [batch, 1, sensor_dim]
         output = output.unsqueeze(1)
 

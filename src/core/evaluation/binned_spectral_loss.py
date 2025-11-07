@@ -131,11 +131,19 @@ class BinnedSpectralLoss(nn.Module):
         pred_binned = self._bin_energy_1d(pred_energy, T)
         target_binned = self._bin_energy_1d(target_energy, T)
 
-        # Step 4: Mean Squared Percentage Error per bin
-        # BSP paper formula (Algorithm 1, line 99):
-        # L_spec = (1 - (E_pred + ε) / (E_target + ε))²
-        # Adding epsilon to BOTH numerator and denominator is more stable
-        relative_error = 1.0 - (pred_binned + self.epsilon) / (target_binned + self.epsilon)
+        # Step 3.5: SCALE-INVARIANT NORMALIZATION
+        # Normalize binned spectra to probability distributions (sum to 1)
+        # This makes loss compare FREQUENCY DISTRIBUTION, not absolute magnitude
+        # MSE loss handles magnitude, BSP handles spectral shape
+        # Shape: [B, C, n_bins] → [B, C, 1] → [B, C, n_bins]
+        pred_total = pred_binned.sum(dim=-1, keepdim=True) + self.epsilon
+        target_total = target_binned.sum(dim=-1, keepdim=True) + self.epsilon
+        pred_binned_norm = pred_binned / pred_total
+        target_binned_norm = target_binned / target_total
+
+        # Step 4: Mean Squared Percentage Error per bin (now scale-invariant!)
+        # Compare normalized distributions, not absolute energies
+        relative_error = 1.0 - (pred_binned_norm + self.epsilon) / (target_binned_norm + self.epsilon)
 
         # Squared error
         squared_error = relative_error ** 2
@@ -279,8 +287,15 @@ class BinnedSpectralLoss(nn.Module):
         pred_binned = self._bin_energy_1d(pred_energy, T)
         target_binned = self._bin_energy_1d(target_energy, T)
 
-        # Relative error per bin
-        relative_error = (pred_binned - target_binned) / (target_binned + self.epsilon)
+        # SCALE-INVARIANT NORMALIZATION (same as forward method)
+        # Normalize binned spectra to probability distributions (sum to 1)
+        pred_total = pred_binned.sum(dim=-1, keepdim=True) + self.epsilon
+        target_total = target_binned.sum(dim=-1, keepdim=True) + self.epsilon
+        pred_binned_norm = pred_binned / pred_total
+        target_binned_norm = target_binned / target_total
+
+        # Relative error per bin (now scale-invariant!)
+        relative_error = (pred_binned_norm - target_binned_norm) / (target_binned_norm + self.epsilon)
         squared_error = relative_error ** 2
 
         # Average over batch and channels: [B, C, n_bins] → [n_bins]
@@ -321,11 +336,17 @@ class BinnedSpectralLoss(nn.Module):
             pred_binned = self._bin_energy_1d(pred_energy, T)
             target_binned = self._bin_energy_1d(target_energy, T)
 
-            # Average over batch and channels
-            pred_spectrum = pred_binned.mean(dim=(0, 1))  # [n_bins]
-            target_spectrum = target_binned.mean(dim=(0, 1))  # [n_bins]
+            # SCALE-INVARIANT NORMALIZATION (for consistency with loss)
+            pred_total = pred_binned.sum(dim=-1, keepdim=True) + self.epsilon
+            target_total = target_binned.sum(dim=-1, keepdim=True) + self.epsilon
+            pred_binned_norm = pred_binned / pred_total
+            target_binned_norm = target_binned / target_total
 
-            # Relative errors
+            # Average over batch and channels (now using normalized spectra)
+            pred_spectrum = pred_binned_norm.mean(dim=(0, 1))  # [n_bins]
+            target_spectrum = target_binned_norm.mean(dim=(0, 1))  # [n_bins]
+
+            # Relative errors (on normalized spectra)
             relative_errors = (pred_spectrum - target_spectrum) / (target_spectrum + self.epsilon)
 
             # Bin edges and centers
