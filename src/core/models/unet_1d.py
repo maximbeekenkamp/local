@@ -199,6 +199,10 @@ class UNet1D(nn.Module):
             kernel_size=1  # 1x1 convolution
         )
 
+        # Output normalization for stable spectral losses
+        # Single group = LayerNorm-like behavior
+        self.output_norm = nn.GroupNorm(1, out_channels)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass through UNet.
@@ -240,6 +244,9 @@ class UNet1D(nn.Module):
 
         # Final output convolution
         x = self.output_conv(x)
+
+        # Apply output normalization to constrain scale for spectral losses
+        x = self.output_norm(x)
 
         return x
 

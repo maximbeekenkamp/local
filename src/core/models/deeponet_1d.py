@@ -64,7 +64,7 @@ class MLP(nn.Module):
                 dim_out=out_features,
                 num_layers=len(hidden_layers) + 1,  # hidden layers + output layer
                 final_activation=nn.Identity(),  # No activation on final layer
-                w0_initial=30.0  # Frequency of sinusoid for first layer
+                w0_initial=10.0  # Reduced from 30 for stability with spectral losses
             )
         else:
             # Standard MLP with specified activation
@@ -176,6 +176,10 @@ class DeepONet1D(nn.Module):
             torch.linspace(0, 1, sensor_dim).unsqueeze(-1)  # [sensor_dim, 1]
         )
 
+        # Output normalization to prevent spectral explosion
+        # Normalizes over the time dimension to constrain output scale
+        self.output_norm = nn.LayerNorm(sensor_dim)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass through DeepONet.
@@ -213,6 +217,10 @@ class DeepONet1D(nn.Module):
 
         # Sum over latent dimension: [batch, sensor_dim, latent_dim] → [batch, sensor_dim]
         output = combined.sum(dim=-1)
+
+        # Apply output normalization to constrain scale for spectral losses
+        # Normalizes over time dimension: [batch, sensor_dim] → [batch, sensor_dim]
+        output = self.output_norm(output)
 
         # Add channel dimension: [batch, sensor_dim] → [batch, 1, sensor_dim]
         output = output.unsqueeze(1)
