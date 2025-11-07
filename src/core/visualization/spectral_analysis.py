@@ -14,6 +14,58 @@ from typing import Dict, Tuple, Optional, List
 from pathlib import Path
 
 
+def compute_cached_true_spectrum(
+    data: torch.Tensor,
+    cache_path: str,
+    n_bins: int = 64,
+    force_recompute: bool = False
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Compute true spectrum from ALL data and cache to disk.
+
+    Uses all available samples to compute a smooth, accurate reference spectrum.
+    Results are cached to avoid recomputation on subsequent runs.
+
+    Args:
+        data: All data samples [N, C, T] where N is full dataset size
+        cache_path: Path to cache file (e.g., 'cache/true_spectrum_64bins.npz')
+        n_bins: Number of frequency bins (default 64 for visualization)
+        force_recompute: If True, recompute even if cache exists
+
+    Returns:
+        frequencies: Bin centers [n_bins] (normalized frequency, 0 to 0.5)
+        energy: Power spectrum E(f) [n_bins] averaged over all samples
+
+    Example:
+        >>> # First call: computes and caches
+        >>> freq, energy = compute_cached_true_spectrum(all_data, 'cache/spectrum.npz')
+        ⚙️  Computing true spectrum from 1000 samples with 64 bins...
+        💾 Saved true spectrum to cache/spectrum.npz
+
+        >>> # Subsequent calls: loads from cache
+        >>> freq, energy = compute_cached_true_spectrum(all_data, 'cache/spectrum.npz')
+        📂 Loading cached true spectrum from cache/spectrum.npz
+    """
+    cache_file = Path(cache_path)
+
+    # Check if cache exists
+    if cache_file.exists() and not force_recompute:
+        print(f"📂 Loading cached true spectrum from {cache_path}")
+        cached = np.load(cache_path)
+        return cached['frequencies'], cached['energy']
+
+    # Compute from ALL data
+    print(f"⚙️  Computing true spectrum from {data.shape[0]} samples with {n_bins} bins...")
+    freq, energy = compute_frequency_spectrum_1d(data, n_bins=n_bins)
+
+    # Save to cache
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(cache_path, frequencies=freq, energy=energy, n_bins=n_bins)
+    print(f"💾 Saved true spectrum to {cache_path}")
+
+    return freq, energy
+
+
 def compute_frequency_spectrum_1d(
     signal: torch.Tensor,
     n_bins: int = 32
@@ -183,15 +235,15 @@ def plot_spectral_bias_comparison(
     # Create figure
     fig, ax = plt.subplots(figsize=figsize)
 
-    # Plot ground truth
-    if show_uncertainty:
-        freq_gt, mean_gt, std_gt = compute_frequency_spectrum_batch(
-            ground_truth, n_bins=n_bins
-        )
-        ax.fill_between(freq_gt, mean_gt - std_gt, mean_gt + std_gt,
-                        alpha=0.2, color='black')
-    else:
-        freq_gt, mean_gt = compute_frequency_spectrum_1d(ground_truth, n_bins=n_bins)
+    # Plot ground truth using cached spectrum from ALL data
+    # Always use 64 bins for smooth, high-resolution visualization (independent of n_bins parameter)
+    cache_dir = Path(save_path).parent / 'cache' if save_path else Path('cache')
+    cache_path = cache_dir / 'true_spectrum_64bins.npz'
+    freq_gt, mean_gt = compute_cached_true_spectrum(
+        ground_truth,
+        cache_path=str(cache_path),
+        n_bins=64  # High resolution for smooth visualization
+    )
 
     ax.plot(freq_gt, mean_gt, 'k-', linewidth=2, label='True', zorder=10)
 

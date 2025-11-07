@@ -12,3 +12,9 @@ tests
 # Python cache
 __pycache__/
 .ipynb_checkpoints/
+
+# Ignore markdown files in root directory only
+/*.md
+# But allow README.md
+!README.md
+

@@ -107,11 +107,14 @@ class SimpleTrainer:
 
         # Weight optimizer for SA-BSP loss (if applicable)
         self.weight_optimizer = None
+        self.adapt_mode = None  # Store adapt_mode for SA-PINNs gradient handling
         if self._is_sa_bsp_loss(self.criterion):
             self.weight_optimizer = Adam(
                 self.criterion.spectral_loss.adaptive_weights.parameters(),
                 lr=config.learning_rate
             )
+            # Store adapt_mode for SA-PINNs style optimization
+            self.adapt_mode = self.criterion.spectral_loss.adapt_mode
 
         # Scheduler setup
         self.scheduler = self._create_scheduler()
@@ -145,6 +148,50 @@ class SimpleTrainer:
         if isinstance(criterion, CombinedLoss):
             return isinstance(criterion.spectral_loss, SelfAdaptiveBSPLoss)
         return False
+
+    def _update_adaptive_weights(self) -> None:
+        """
+        Update adaptive weights using SA-PINNs style optimization.
+
+        Applies gradient negation based on adapt_mode:
+        - 'per-bin': Negate ALL weight gradients (ascent on loss to emphasize hard bins)
+        - 'global': Standard gradients (descent on loss for MSE/BSP balance)
+        - 'hierarchical': Negate per-bin gradients (indices 1:), keep global standard (index 0)
+
+        This implements the saddle-point optimization from SA-PINNs paper:
+        - Model: min_θ L(θ, λ) (standard gradient descent)
+        - Weights: max_λ L(θ, λ) (gradient ascent via negated gradients)
+        """
+        if self.weight_optimizer is None:
+            return
+
+        # Get adaptive weight parameters
+        adaptive_params = list(self.criterion.spectral_loss.adaptive_weights.parameters())
+
+        if self.adapt_mode == 'per-bin':
+            # SA-PINNs style: NEGATE all gradients for per-bin weights
+            # This performs gradient ascent on the loss, increasing weights for
+            # difficult frequency bins (typically high frequencies)
+            for param in adaptive_params:
+                if param.grad is not None:
+                    param.grad = -param.grad
+
+        elif self.adapt_mode == 'global':
+            # Standard gradients (no negation)
+            # Global weight balances MSE vs BSP, should minimize total loss
+            pass
+
+        elif self.adapt_mode == 'hierarchical':
+            # Mixed approach: global uses standard, per-bin uses negated
+            # weights[0] = global weight (standard gradient)
+            # weights[1:] = per-bin weights (negated gradients)
+            for param in adaptive_params:
+                if param.grad is not None:
+                    # Negate all except first element (global weight)
+                    param.grad[1:] = -param.grad[1:]
+
+        # Update weights with (possibly negated) gradients
+        self.weight_optimizer.step()
 
     def _create_scheduler(self):
         """Create learning rate scheduler based on config."""
@@ -215,9 +262,11 @@ class SimpleTrainer:
             # Gradient clipping for numerical stability (prevents gradient explosion)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
+            # Update model parameters (standard gradient descent)
             self.optimizer.step()
-            if self.weight_optimizer is not None:
-                self.weight_optimizer.step()
+
+            # Update adaptive weights (SA-PINNs style with negated gradients)
+            self._update_adaptive_weights()
 
             # Step scheduler (for cosine annealing, step every batch)
             if self.config.scheduler_type == 'cosine':

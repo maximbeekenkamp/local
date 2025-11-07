@@ -1,33 +1,41 @@
 """
 Self-Adaptive Binned Spectral Power (SA-BSP) Loss for 1D temporal neural operators.
 
-Extends BSP loss with learnable per-bin weights inspired by SA-PINNs (Self-Adaptive
-Physics-Informed Neural Networks). Weights adapt during training to balance errors
-across frequency bands.
+Extends BSP loss with learnable weights inspired by SA-PINNs (Self-Adaptive
+Physics-Informed Neural Networks). Three variants:
 
-Key innovation: Weights are learned via saddle-point optimization
-    min_θ max_λ: L(θ, λ) = Σ_i λ_i × error_i(θ)
+1. **Per-bin** (32 weights): Emphasizes difficult frequency bins
+2. **Global** (1 weight): Balances MSE vs BSP loss
+3. **Hierarchical** (33 weights): Both global and per-bin adaptation
 
-Where:
-- θ: Model parameters
-- λ: Adaptive weights (one per frequency bin)
-- error_i: Per-bin spectral error
+Key innovation: Uses SA-PINNs saddle-point optimization
+    - Model: min_θ L(θ, λ)  (standard gradient descent)
+    - Weights: max_λ L(θ, λ)  (negated gradients - ascent on loss)
 
-This encourages the model to reduce errors in all frequency bands, not just
-low frequencies (mitigates spectral bias more effectively than fixed BSP).
+For per-bin weights, this encourages the model to reduce errors in all frequency
+bands by automatically increasing weights for hard-to-fit bins (typically high
+frequencies), effectively mitigating spectral bias.
+
+Implementation follows SA-PINNs:
+- Raw weights (not log-space)
+- Unconstrained (can grow unbounded)
+- Negated gradients for per-bin weights
+- Standard gradients for global weight
 
 Reference:
-- SA-PINNs: "Understanding and Mitigating Gradient Flow Pathologies in Physics-Informed Neural Networks"
-- Generatively-Stabilised-NOs adaptive_spectral_loss.py (2D implementation)
+- SA-PINNs: "Understanding and Mitigating Gradient Flow Pathologies in
+  Physics-Informed Neural Networks" (McClenny & Braga-Neto, 2020)
+- GitHub: https://github.com/levimcclenny/SA-PINNs
 
 Training requirements:
-    1. Main optimizer for model parameters (e.g., Adam on model.parameters())
-    2. Separate optimizer for adaptive weights (e.g., Adam on loss.adaptive_weights.parameters())
-    3. Update both optimizers each iteration
+    1. Main optimizer for model parameters
+    2. Separate optimizer for adaptive weights
+    3. Negate gradients for per-bin weights before optimizer step
+    4. Standard gradients for global weight
 
-Example:
+Example (per-bin mode):
     >>> # Create loss
-    >>> loss_fn = SelfAdaptiveBSPLoss(n_bins=32, adapt_mode='per-bin')
+    >>> loss_fn = SelfAdaptiveSpectralLoss(n_bins=32, adapt_mode='per-bin')
     >>>
     >>> # Create optimizers
     >>> model_optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -35,16 +43,21 @@ Example:
     >>>
     >>> # Training loop
     >>> for batch in dataloader:
-    ...     # Forward pass
     ...     pred = model(input)
     ...     loss = loss_fn(pred, target)
     ...
-    ...     # Backward pass
     ...     model_optimizer.zero_grad()
     ...     weight_optimizer.zero_grad()
     ...     loss.backward()
+    ...
+    ...     # Standard descent for model
     ...     model_optimizer.step()
-    ...     weight_optimizer.step()  # Update adaptive weights
+    ...
+    ...     # SA-PINNs style: NEGATE gradients for per-bin weights (ascent on loss)
+    ...     for param in loss_fn.adaptive_weights.parameters():
+    ...         if param.grad is not None:
+    ...             param.grad = -param.grad
+    ...     weight_optimizer.step()
 """
 
 import torch
@@ -59,13 +72,14 @@ class SelfAdaptiveWeights(nn.Module):
     """
     Trainable adaptive weights for frequency bins.
 
-    Weights are stored in log-space (log λ) to ensure positivity after
-    exponentiation (λ = exp(log λ) > 0). This is the standard SA-PINNs approach.
+    Uses RAW weights (not log-space) following SA-PINNs implementation.
+    Weights are unconstrained and can grow unbounded, allowing the saddle-point
+    optimization to naturally discover hard-to-fit frequency bins.
 
     Attributes:
         n_components: Number of weight components (e.g., n_bins for per-bin mode)
-        mode: Weight adaptation mode ('per-bin', 'global', 'both', 'none')
-        log_weights: Trainable log-weights (parameters)
+        mode: Weight adaptation mode ('per-bin', 'global', 'hierarchical', 'none')
+        weights: Trainable weights (parameters)
     """
 
     def __init__(
@@ -81,36 +95,36 @@ class SelfAdaptiveWeights(nn.Module):
             n_components: Number of weight components
                 - For 'per-bin': n_components = n_bins
                 - For 'global': n_components = 1
-                - For 'both': n_components = n_bins + 1
+                - For 'hierarchical': n_components = n_bins + 1
                 - For 'none': No parameters (fixed weights)
             mode: Weight adaptation strategy
                 - 'per-bin': Independent weight per frequency bin (default)
-                - 'global': Single weight for all bins
-                - 'both': Global weight × per-bin weights (hierarchical)
+                - 'global': Single weight for MSE/BSP balance
+                - 'hierarchical': Global weight × per-bin weights
                 - 'none': Fixed unit weights (equivalent to BSP)
             init_value: Initial weight value (default: 1.0)
 
         Note:
-            Weights are stored as log(weight) and exponentiated during forward pass.
-            This ensures weights remain positive during optimization.
+            Following SA-PINNs, weights are stored as RAW values (not log-space)
+            and are unconstrained. This allows saddle-point optimization with
+            negated gradients to naturally find optimal weights.
         """
         super().__init__()
         self.n_components = n_components
         self.mode = mode
 
-        valid_modes = ['per-bin', 'global', 'both', 'none']
+        valid_modes = ['per-bin', 'global', 'hierarchical', 'none']
         if mode not in valid_modes:
             raise ValueError(f"mode must be one of {valid_modes}, got {mode}")
 
-        # Initialize log-weights
+        # Initialize raw weights (SA-PINNs style)
         if mode == 'none':
             # No trainable parameters, use fixed weights
-            self.register_buffer('log_weights', torch.zeros(n_components))
+            self.register_buffer('weights', torch.ones(n_components))
         else:
-            # Trainable parameters
-            init_log_value = np.log(init_value)
-            self.log_weights = nn.Parameter(
-                torch.full((n_components,), init_log_value, dtype=torch.float32)
+            # Trainable parameters (raw weights, no log-space)
+            self.weights = nn.Parameter(
+                torch.full((n_components,), init_value, dtype=torch.float32)
             )
 
     def forward(self) -> torch.Tensor:
@@ -118,18 +132,17 @@ class SelfAdaptiveWeights(nn.Module):
         Get current adaptive weights.
 
         Returns:
-            Weights [n_components], always positive
+            Weights [n_components], unconstrained
 
         Shape:
             Output: [n_components]
-        """
-        # Clip log_weights to prevent explosion
-        # exp(5) ≈ 148, exp(-5) ≈ 0.0067
-        # Allows adaptive range of ~22,000x while preventing overflow
-        log_weights_clipped = torch.clamp(self.log_weights, min=-5.0, max=5.0)
 
-        # Exponentiate to ensure positivity
-        return torch.exp(log_weights_clipped)
+        Note:
+            No clipping or exp - returns raw weights directly.
+            Following SA-PINNs, weights are unconstrained and can grow
+            unbounded as training progresses.
+        """
+        return self.weights
 
     def get_statistics(self) -> dict:
         """
@@ -185,9 +198,9 @@ class SelfAdaptiveBSPLoss(nn.Module):
             n_bins: Number of frequency bins (default: 32)
             lambda_sa: Overall weight for SA-BSP loss (default: 1.0)
             adapt_mode: Weight adaptation mode (default: 'per-bin')
-                - 'per-bin': Independent weight per bin
-                - 'global': Single weight for all bins
-                - 'both': Global × per-bin (hierarchical)
+                - 'per-bin': Independent weight per bin (32 weights)
+                - 'global': Single weight for MSE/BSP balance (1 weight)
+                - 'hierarchical': Global × per-bin (33 weights: 1 global + 32 per-bin)
                 - 'none': Fixed unit weights (degenerates to BSP)
             init_weight: Initial weight value (default: 1.0)
             epsilon: Numerical stability constant (default: 1e-8)
@@ -195,7 +208,8 @@ class SelfAdaptiveBSPLoss(nn.Module):
 
         Note:
             When using SA-BSP in training, you MUST create a separate optimizer
-            for the adaptive weights. See class docstring for example.
+            for the adaptive weights and use SA-PINNs style optimization (negated
+            gradients for per-bin weights). See class docstring for details.
         """
         super().__init__()
         self.n_bins = n_bins
@@ -214,8 +228,8 @@ class SelfAdaptiveBSPLoss(nn.Module):
         # Create adaptive weights
         if adapt_mode == 'global':
             n_components = 1
-        elif adapt_mode == 'both':
-            n_components = n_bins + 1  # n_bins per-bin + 1 global
+        elif adapt_mode == 'hierarchical':
+            n_components = n_bins + 1  # 1 global + n_bins per-bin
         else:  # 'per-bin' or 'none'
             n_components = n_bins
 
@@ -254,27 +268,31 @@ class SelfAdaptiveBSPLoss(nn.Module):
         if self.adapt_mode == 'per-bin':
             # Direct per-bin weighting
             # weights: [n_bins], bin_errors: [n_bins]
+            # Uses SA-PINNs style: emphasize high-error bins
             weighted_errors = weights * bin_errors
+            sa_bsp_loss = weighted_errors.mean()
 
         elif self.adapt_mode == 'global':
-            # Single global weight for all bins
+            # Single global weight for MSE/BSP balance
             # weights: [1], bin_errors: [n_bins]
-            weighted_errors = weights[0] * bin_errors
+            # Sum all bin errors first, then multiply by global weight
+            total_bsp = bin_errors.mean()
+            sa_bsp_loss = weights[0] * total_bsp
 
-        elif self.adapt_mode == 'both':
+        elif self.adapt_mode == 'hierarchical':
             # Hierarchical: global × per-bin
             # weights: [n_bins+1] where weights[0] = global, weights[1:] = per-bin
+            # Global weight uses standard optimization, per-bin uses negated gradients
             global_weight = weights[0]
             per_bin_weights = weights[1:]
             weighted_errors = global_weight * per_bin_weights * bin_errors
+            sa_bsp_loss = weighted_errors.mean()
 
         else:  # 'none'
             # No adaptation, uniform weighting (equivalent to BSP)
-            weighted_errors = bin_errors
+            sa_bsp_loss = bin_errors.mean()
 
-        # Step 4: Sum weighted errors and apply overall lambda
-        sa_bsp_loss = weighted_errors.mean()
-
+        # Apply overall lambda scaling
         return self.lambda_sa * sa_bsp_loss
 
     def get_loss_components(
