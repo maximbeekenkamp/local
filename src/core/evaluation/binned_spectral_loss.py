@@ -84,6 +84,14 @@ class BinnedSpectralLoss(nn.Module):
             raise ValueError(f"binning_mode must be 'linear' or 'log', got {binning_mode}")
         self.binning_mode = binning_mode
 
+        # Bin-specific weights λ_i (BSP paper Algorithm 1, lines 96-97)
+        # Default to uniform weighting (all 1s) as per paper's typical use
+        # Can be modified for problem-specific weighting (e.g., emphasize high frequencies)
+        self.register_buffer(
+            'bin_weights',
+            torch.ones(n_bins, dtype=torch.float32)
+        )
+
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """
         Compute Binned Spectral Power loss.
@@ -132,9 +140,11 @@ class BinnedSpectralLoss(nn.Module):
         # Squared error
         squared_error = relative_error ** 2
 
-        # Step 5: Average over bins and channels, mean over batch
-        # Shape: [B, C, n_bins] → [B] → scalar
-        bsp_loss = squared_error.mean(dim=(-2, -1)).mean()
+        # Step 5: Paper formula (Algorithm 1, line 99):
+        # L_spec = (1/N_k) * Σ_c Σ_i (...)²
+        # = mean over bins, SUM over channels, mean over batch
+        # Shape: [B, C, n_bins] → [B, n_bins] → scalar
+        bsp_loss = squared_error.sum(dim=1).mean()  # sum channels (Σ_c), mean over bins and batch (1/N_k * 1/B)
 
         # Apply weight
         return self.lambda_bsp * bsp_loss
@@ -228,6 +238,11 @@ class BinnedSpectralLoss(nn.Module):
         # Add epsilon to avoid division by zero for empty bins
         bin_counts = bin_counts.unsqueeze(0).unsqueeze(0)  # [1, 1, n_bins]
         binned_energy = binned_energy / (bin_counts + 1e-10)
+
+        # Apply bin-specific weights λ_i (BSP paper Algorithm 1, lines 96-97)
+        # E^bin(c,i) ← ... · λ_i
+        # Shape: [B, C, n_bins] * [1, 1, n_bins] → [B, C, n_bins]
+        binned_energy = binned_energy * self.bin_weights.unsqueeze(0).unsqueeze(0)
 
         return binned_energy
 

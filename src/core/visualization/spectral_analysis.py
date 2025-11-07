@@ -279,15 +279,21 @@ def compute_spectral_bias_metric(
     freq_pred, energy_pred = compute_frequency_spectrum_1d(prediction, n_bins=n_bins)
     freq_gt, energy_gt = compute_frequency_spectrum_1d(ground_truth, n_bins=n_bins)
 
+    # Compute adaptive cutoffs based on actual Nyquist frequency
+    # rfft gives frequencies [0, 0.5] for real signals, not [0, 1.0]
+    max_freq = freq_pred[-1]  # Nyquist frequency (~0.5 for rfft)
+    low_cutoff = 0.3 * max_freq      # 30% of Nyquist
+    high_cutoff = 0.7 * max_freq     # 70% of Nyquist
+
     # Compute relative error per bin
     # Avoid division by zero
     epsilon = 1e-10
     relative_error = np.abs(energy_pred - energy_gt) / (energy_gt + epsilon)
 
-    # Divide into frequency ranges
-    low_mask = freq_pred < low_freq_cutoff
-    mid_mask = (freq_pred >= low_freq_cutoff) & (freq_pred < high_freq_cutoff)
-    high_mask = freq_pred >= high_freq_cutoff
+    # Divide into frequency ranges (using adaptive cutoffs)
+    low_mask = freq_pred < low_cutoff
+    mid_mask = (freq_pred >= low_cutoff) & (freq_pred < high_cutoff)
+    high_mask = freq_pred >= high_cutoff
 
     # Average error in each range
     low_freq_error = relative_error[low_mask].mean() if low_mask.any() else 0.0
