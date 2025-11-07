@@ -242,7 +242,9 @@ class BinnedSpectralLoss(nn.Module):
         # Apply bin-specific weights λ_i (BSP paper Algorithm 1, lines 96-97)
         # E^bin(c,i) ← ... · λ_i
         # Shape: [B, C, n_bins] * [1, 1, n_bins] → [B, C, n_bins]
-        binned_energy = binned_energy * self.bin_weights.unsqueeze(0).unsqueeze(0)
+        # Ensure bin_weights are on the same device as binned_energy
+        bin_weights = self.bin_weights.to(binned_energy.device)
+        binned_energy = binned_energy * bin_weights.unsqueeze(0).unsqueeze(0)
 
         return binned_energy
 
