@@ -18,3 +18,5 @@ __pycache__/
 # But allow README.md
 !README.md
 
+# Allow real spectrum generation
+!scripts/precompute_spectrum.py
