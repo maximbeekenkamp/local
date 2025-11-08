@@ -18,7 +18,7 @@ from configs.visualization_config import SPECTRUM_CACHE_FILENAME, CACHE_DIR
 def compute_cached_true_spectrum(
     data: torch.Tensor,
     cache_path: str,
-    n_bins: int = 32,
+    n_bins: int = None,
     force_recompute: bool = False
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -33,7 +33,7 @@ def compute_cached_true_spectrum(
     Args:
         data: All data samples [N, C, T] where N is full dataset size
         cache_path: Path to cache file (e.g., 'cache/true_spectrum.npz')
-        n_bins: Number of bins for BSP loss training (default: N_BINS_VISUALIZATION)
+        n_bins: Number of bins for BSP loss training (default: None, uses BSP_CONFIG n_bins)
         force_recompute: If True, recompute even if cache exists
 
     Returns:
@@ -57,6 +57,11 @@ def compute_cached_true_spectrum(
         📂 Loading cached true spectrum from cache/true_spectrum.npz
     """
     cache_file = Path(cache_path)
+
+    # Default to BSP n_bins if not specified (SINGLE SOURCE OF TRUTH)
+    if n_bins is None:
+        from configs.loss_config import BSP_CONFIG
+        n_bins = BSP_CONFIG.loss_params['n_bins']
 
     # Check if cache exists
     if cache_file.exists() and not force_recompute:
