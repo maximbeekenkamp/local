@@ -38,10 +38,10 @@ def compute_cached_true_spectrum(
 
     Returns:
         frequencies: Unbinned frequency array [~2000] for visualization
-        energy: Unbinned mean power spectrum [~2000] for visualization
+        energy: Unbinned median power spectrum [~2000] for visualization
 
     Cache contains:
-        - unbinned_frequencies, unbinned_energy_mean, unbinned_energy_std (for viz)
+        - unbinned_frequencies, unbinned_energy_median, unbinned_energy_p16, unbinned_energy_p84 (for viz)
         - bin_edges, bsp_n_bins (for BSP loss training)
 
     Example:
@@ -67,14 +67,14 @@ def compute_cached_true_spectrum(
     if cache_file.exists() and not force_recompute:
         print(f"📂 Loading cached true spectrum from {cache_path}")
         cached = np.load(cache_path)
-        # Return unbinned data for visualization
-        return cached['unbinned_frequencies'], cached['unbinned_energy_mean']
+        # Return unbinned data for visualization (median instead of mean)
+        return cached['unbinned_frequencies'], cached['unbinned_energy_median']
 
     # Compute from ALL data
     print(f"⚙️  Computing true spectrum from {data.shape[0]} samples...")
 
-    # 1. Compute UNBINNED spectrum for visualization (with uncertainty bands)
-    freq_unbinned, energy_mean, energy_std = compute_unbinned_spectrum(data)
+    # 1. Compute UNBINNED spectrum for visualization (with percentile-based uncertainty bands)
+    freq_unbinned, energy_median, energy_p16, energy_p84 = compute_unbinned_spectrum(data)
 
     # 2. Compute BINNED spectrum for BSP loss training
     freq_binned, energy_binned = compute_frequency_spectrum_1d(data, n_bins=n_bins)
@@ -92,10 +92,11 @@ def compute_cached_true_spectrum(
     cache_file.parent.mkdir(parents=True, exist_ok=True)
     np.savez(
         cache_path,
-        # Unbinned spectrum for visualization (full FFT resolution)
-        unbinned_frequencies=freq_unbinned,  # [~2000]
-        unbinned_energy_mean=energy_mean,
-        unbinned_energy_std=energy_std,
+        # Unbinned spectrum for visualization (full FFT resolution with percentile bands)
+        unbinned_frequencies=freq_unbinned,    # [~2000]
+        unbinned_energy_median=energy_median,  # Median (50th percentile)
+        unbinned_energy_p16=energy_p16,        # Lower bound (16th percentile ≈ -1σ)
+        unbinned_energy_p84=energy_p84,        # Upper bound (84th percentile ≈ +1σ)
         # Binned spectrum for BSP loss training
         bin_edges=bin_edges,  # [n_bins+1] - for BSP loss consistency
         bsp_n_bins=n_bins,    # BSP bin count (e.g., 32)
@@ -106,10 +107,11 @@ def compute_cached_true_spectrum(
     )
     print(f"💾 Saved true spectrum to {cache_path}")
     print(f"   Unbinned: {len(freq_unbinned)} frequencies for visualization")
+    print(f"   Percentile bands: 16th, 50th (median), 84th percentiles")
     print(f"   Binned: {n_bins} bins for BSP loss training")
     print(f"   BSP bin edges: {n_bins+1} edges from {freq_min:.6f} to {freq_max:.6f}")
 
-    return freq_unbinned, energy_mean
+    return freq_unbinned, energy_median
 
 
 def compute_frequency_spectrum_1d(
@@ -201,11 +203,11 @@ def compute_frequency_spectrum_1d(
 
 def compute_unbinned_spectrum(
     signal: torch.Tensor
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Compute unbinned frequency spectrum at full FFT resolution.
 
-    Returns mean spectrum and standard deviation for uncertainty bands.
+    Returns median spectrum with percentile-based uncertainty bands.
     No binning is applied - returns all FFT frequencies directly.
 
     Args:
@@ -213,23 +215,30 @@ def compute_unbinned_spectrum(
 
     Returns:
         frequencies: Frequency values [n_freq] (normalized, 0 to 0.5), DC removed
-        mean_energy: Mean power spectrum [n_freq] averaged over batch and channels
-        std_energy: Std dev of power spectrum [n_freq] for uncertainty bands
+        median_energy: Median power spectrum [n_freq] over batch (robust to outliers)
+        p16_energy: 16th percentile [n_freq] for lower uncertainty bound (≈ -1σ)
+        p84_energy: 84th percentile [n_freq] for upper uncertainty bound (≈ +1σ)
 
     Algorithm:
         1. Apply 1D real FFT to each sample
         2. Compute power spectrum: |FFT|²
         3. Average over channels: [B, C, freq] → [B, freq]
-        4. Compute mean and std over batch dimension
+        4. Compute percentiles (16th, 50th, 84th) over batch dimension
         5. Skip DC component (frequency = 0)
+
+    Note:
+        Uses percentiles instead of mean ± std because:
+        - Guarantees positive values (safe for log-scale plotting)
+        - More robust to outliers than mean ± std
+        - 16th-84th percentiles ≈ ±1σ for normal distributions
 
     Example:
         >>> signal = torch.randn(16, 1, 4000)  # 16 samples
-        >>> freqs, mean, std = compute_unbinned_spectrum(signal)
+        >>> freqs, median, p16, p84 = compute_unbinned_spectrum(signal)
         >>> print(freqs.shape)  # (2000,) - full FFT resolution minus DC
-        >>> # Plot with uncertainty band
-        >>> plt.fill_between(freqs, mean - std, mean + std, alpha=0.3)
-        >>> plt.plot(freqs, mean)
+        >>> # Plot with uncertainty band (safe for log scale)
+        >>> plt.fill_between(freqs, p16, p84, alpha=0.3)
+        >>> plt.plot(freqs, median)
     """
     # Convert to numpy
     if isinstance(signal, torch.Tensor):
@@ -257,12 +266,14 @@ def compute_unbinned_spectrum(
     frequencies_no_dc = frequencies[1:]  # Skip DC (frequency = 0)
     power_no_dc = power_per_sample[:, 1:]  # [B, freq-1]
 
-    # Compute statistics across batch dimension
-    # Shape: [B, freq-1] → [freq-1]
-    mean_energy = power_no_dc.mean(axis=0)
-    std_energy = power_no_dc.std(axis=0)
+    # Compute percentiles across batch dimension for robust uncertainty bands
+    # Shape: [B, freq-1] → [freq-1] for each percentile
+    # 16th and 84th percentiles correspond to approximately ±1σ for normal distribution
+    energy_median = np.percentile(power_no_dc, 50, axis=0)  # Median (more robust than mean)
+    energy_p16 = np.percentile(power_no_dc, 16, axis=0)     # Lower bound ≈ -1σ
+    energy_p84 = np.percentile(power_no_dc, 84, axis=0)     # Upper bound ≈ +1σ
 
-    return frequencies_no_dc, mean_energy, std_energy
+    return frequencies_no_dc, energy_median, energy_p16, energy_p84
 
 
 def compute_frequency_spectrum_batch(

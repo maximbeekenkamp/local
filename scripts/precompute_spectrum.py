@@ -3,11 +3,13 @@
 Precompute and cache the true frequency spectrum for the full dataset.
 
 This script:
-1. Loads the CDON dataset (train + val)
+1. Loads the CDON dataset (train + val + test - ALL available data)
 2. Computes the true frequency spectrum across all samples
 3. Caches it for use in analysis
 
 The cached spectrum can then be committed to git to avoid recomputation.
+
+Note: Uses ALL data for smoothest "ground truth" visualization.
 """
 
 import sys
@@ -44,8 +46,8 @@ def main():
     print(f"\n📥 Loading normalization stats...")
     normalizer = CDONNormalization(stats_path=str(STATS_PATH))
 
-    # Load full dataset (train + val)
-    print(f"📥 Loading CDON dataset...")
+    # Load full dataset (train + val + test - ALL available data)
+    print(f"📥 Loading CDON dataset (all splits)...")
     train_dataset = CDONDataset(
         data_dir=str(DATA_DIR),
         split='train',
@@ -54,16 +56,23 @@ def main():
 
     val_dataset = CDONDataset(
         data_dir=str(DATA_DIR),
+        split='val',
+        normalize=normalizer
+    )
+
+    test_dataset = CDONDataset(
+        data_dir=str(DATA_DIR),
         split='test',
         normalize=normalizer
     )
 
-    # Combine datasets for full spectrum
-    full_dataset = ConcatDataset([train_dataset, val_dataset])
+    # Combine ALL datasets for smoothest ground truth spectrum
+    full_dataset = ConcatDataset([train_dataset, val_dataset, test_dataset])
 
     print(f"   Train samples: {len(train_dataset)}")
     print(f"   Val samples: {len(val_dataset)}")
-    print(f"   Total samples: {len(full_dataset)}")
+    print(f"   Test samples: {len(test_dataset)}")
+    print(f"   Total samples: {len(full_dataset)} (using ALL data for ground truth)")
 
     # Create dataloader
     loader = DataLoader(
