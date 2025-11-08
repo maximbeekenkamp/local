@@ -59,10 +59,20 @@ def compute_cached_true_spectrum(
     print(f"⚙️  Computing true spectrum from {data.shape[0]} samples with {n_bins} bins...")
     freq, energy = compute_frequency_spectrum_1d(data, n_bins=n_bins)
 
-    # Save to cache
+    # Get signal timesteps for frequency bin edge computation
+    timesteps = data.shape[-1]  # T dimension (e.g., 4000 for CDON)
+
+    # Save to cache with metadata
     cache_file.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(cache_path, frequencies=freq, energy=energy, n_bins=n_bins)
+    np.savez(
+        cache_path,
+        frequencies=freq,
+        energy=energy,
+        n_bins=n_bins,
+        timesteps=timesteps  # Save signal length for BSP loss bin edge computation
+    )
     print(f"💾 Saved true spectrum to {cache_path}")
+    print(f"   Metadata: n_bins={n_bins}, timesteps={timesteps}")
 
     return freq, energy
 
@@ -87,10 +97,10 @@ def compute_frequency_spectrum_1d(
         energy: Power spectrum E(f) averaged over batch and channels
 
     Algorithm:
-        1. Average over batch and channel dimensions
-        2. Apply 1D real FFT
-        3. Compute power spectrum: |FFT|²
-        4. Bin frequencies with linear spacing
+        1. Apply 1D real FFT to each sample
+        2. Compute power spectrum: |FFT|²
+        3. Average power spectrum over batch and channel dimensions
+        4. Bin frequencies with linear spacing in FREQUENCY space
         5. Average energy within each bin
 
     Example:
@@ -98,51 +108,60 @@ def compute_frequency_spectrum_1d(
         >>> freqs, energy = compute_frequency_spectrum_1d(signal)
         >>> plt.loglog(freqs, energy)
     """
-    # Convert to numpy and average over batch and channel
+    # Convert to numpy
     if isinstance(signal, torch.Tensor):
         signal_np = signal.cpu().numpy()
     else:
         signal_np = signal
 
-    # Average over batch (axis 0) and channel (axis 1)
-    # Shape: [B, C, T] → [T]
-    signal_avg = signal_np.mean(axis=(0, 1))
+    # Get dimensions
+    timesteps = signal_np.shape[-1]
 
-    # Compute 1D FFT (real signal → complex FFT)
-    fft_result = np.fft.rfft(signal_avg)  # Shape: [T//2 + 1]
+    # CORRECT ORDER: FFT → Power → Average
+    # Compute 1D FFT for each sample (don't average yet!)
+    # Shape: [B, C, T] → [B, C, T//2 + 1] complex
+    fft_result = np.fft.rfft(signal_np, axis=-1)
 
-    # Compute power spectrum
-    power_spectrum = np.abs(fft_result) ** 2
+    # Compute power spectrum for each sample
+    # Shape: [B, C, T//2 + 1] complex → [B, C, T//2 + 1] real
+    power_spectrum_per_sample = np.abs(fft_result) ** 2
 
-    # Create frequency bins
-    n_freqs = len(power_spectrum)
-    freq_indices = np.arange(n_freqs)
+    # NOW average over batch and channel
+    # Shape: [B, C, T//2 + 1] → [T//2 + 1]
+    power_spectrum = power_spectrum_per_sample.mean(axis=(0, 1))
 
-    # Linear binning (like BSP paper)
-    bin_edges = np.linspace(0, n_freqs, n_bins + 1)
+    # Get actual frequency values (not indices!)
+    # Returns normalized frequencies: [0, 1/T, 2/T, ..., 0.5]
+    frequencies = np.fft.rfftfreq(timesteps)  # Shape: [T//2 + 1]
+
+    # Linear binning in FREQUENCY space (not index space!)
+    # Create bin edges linearly spaced in frequency VALUES
+    freq_min = frequencies[1]  # Skip DC (frequency = 0)
+    freq_max = frequencies[-1]  # Nyquist frequency
+    bin_edges = np.linspace(freq_min, freq_max, n_bins + 1)
 
     # Compute bin-averaged energy
     energy_binned = np.zeros(n_bins)
     freq_binned = np.zeros(n_bins)
 
+    # Skip DC component (index 0) as we start from frequencies[1]
+    frequencies_no_dc = frequencies[1:]
+    power_spectrum_no_dc = power_spectrum[1:]
+
     for i in range(n_bins):
-        # Find indices in this bin
-        bin_mask = (freq_indices >= bin_edges[i]) & (freq_indices < bin_edges[i + 1])
+        # Find frequencies in this bin (using actual frequency values!)
+        bin_mask = (frequencies_no_dc >= bin_edges[i]) & (frequencies_no_dc < bin_edges[i + 1])
 
         if bin_mask.any():
             # Average energy in this bin
-            energy_binned[i] = power_spectrum[bin_mask].mean()
-            # Bin center frequency
+            energy_binned[i] = power_spectrum_no_dc[bin_mask].mean()
+            # Bin center frequency (actual frequency value)
             freq_binned[i] = (bin_edges[i] + bin_edges[i + 1]) / 2
         else:
             energy_binned[i] = 0.0
             freq_binned[i] = bin_edges[i]
 
-    # Normalize frequencies to [0, 0.5] (Nyquist range)
-    timesteps = signal_np.shape[-1]
-    freq_binned_normalized = freq_binned / timesteps
-
-    return freq_binned_normalized, energy_binned
+    return freq_binned, energy_binned
 
 
 def compute_frequency_spectrum_batch(

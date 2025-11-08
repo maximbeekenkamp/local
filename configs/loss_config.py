@@ -69,6 +69,7 @@ class LossConfig:
             - lambda_bsp (float): Weight for spectral loss (default: 1.0)
             - epsilon (float): Numerical stability constant (default: 1e-8)
             - binning_mode (str): 'linear' or 'log' spacing (default: 'linear')
+            - signal_length (int): Expected signal length in time dimension (default: 4000)
 
         For 'sa_bsp':
             - n_bins (int): Number of frequency bins (default: 32)
@@ -81,6 +82,7 @@ class LossConfig:
             - init_weight (float): Initial weight value (default: 1.0)
             - epsilon (float): Numerical stability constant (default: 1e-8)
             - binning_mode (str): 'linear' or 'log' spacing (default: 'linear')
+            - signal_length (int): Expected signal length in time dimension (default: 4000)
 
         For 'combined':
             - base_loss (str): Base loss type ('relative_l2')
@@ -89,6 +91,7 @@ class LossConfig:
             - n_bins (int): Number of frequency bins (default: 32)
             - epsilon (float): Numerical stability constant (default: 1e-8)
             - binning_mode (str): 'linear' or 'log' spacing (default: 'linear')
+            - signal_length (int): Expected signal length in time dimension (default: 4000)
             - adapt_mode (str): For SA-BSP, weight adaptation mode (default: 'per-bin')
             - init_weight (float): For SA-BSP, initial weight value (default: 1.0)
     """
@@ -172,7 +175,8 @@ BSP_CONFIG = LossConfig(
         'lambda_spectral': 0.1,  # Paper's Airfoil value (Table 4, Page 26)
         'n_bins': 32,
         'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
-        'binning_mode': 'linear'
+        'binning_mode': 'linear',
+        'signal_length': 4000  # CDON temporal resolution
     },
     description='MSE + Binned Spectral Power loss'
 )
@@ -187,7 +191,8 @@ SA_BSP_PERBIN_CONFIG = LossConfig(
         'adapt_mode': 'per-bin',  # 32 trainable weights (one per bin)
         'init_weight': 1.0,
         'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
-        'binning_mode': 'linear'
+        'binning_mode': 'linear',
+        'signal_length': 4000  # CDON temporal resolution
     },
     description='MSE + SA-BSP (per-bin): 32 adaptive weights with negated gradients'
 )
@@ -202,7 +207,8 @@ SA_BSP_GLOBAL_CONFIG = LossConfig(
         'adapt_mode': 'global',  # 2 trainable weights (w_mse + w_bsp) for MSE/BSP balance
         'init_weight': 1.0,
         'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
-        'binning_mode': 'linear'
+        'binning_mode': 'linear',
+        'signal_length': 4000  # CDON temporal resolution
     },
     description='MSE + SA-BSP (global): 2 adaptive weights (w_mse + w_bsp) with negated gradients'
 )
@@ -217,7 +223,8 @@ SA_BSP_COMBINED_CONFIG = LossConfig(
         'adapt_mode': 'combined',  # 34 weights: w_mse + w_bsp + 32 per-bin
         'init_weight': 1.0,
         'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
-        'binning_mode': 'linear'
+        'binning_mode': 'linear',
+        'signal_length': 4000  # CDON temporal resolution
     },
     description='MSE + SA-BSP (combined): 34 weights (w_mse + w_bsp + 32 per-bin, all negated gradients)'
 )
@@ -232,7 +239,8 @@ SA_BSP_FFT_CONFIG = LossConfig(
         'adapt_mode': 'fft',  # Spectral-domain weight optimization
         'init_weight': 1.0,
         'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
-        'binning_mode': 'linear'
+        'binning_mode': 'linear',
+        'signal_length': 4000  # CDON temporal resolution
     },
     description='MSE + SA-BSP (FFT): 32 weights optimized in spectral domain with negated gradients'
 )

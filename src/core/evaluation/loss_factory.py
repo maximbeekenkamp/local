@@ -194,12 +194,14 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
         lambda_bsp = params.get('lambda_bsp', 1.0)
         epsilon = params.get('epsilon', 1e-8)
         binning_mode = params.get('binning_mode', 'linear')
+        signal_length = params.get('signal_length', 4000)
 
         return BinnedSpectralLoss(
             n_bins=n_bins,
             lambda_bsp=lambda_bsp,
             epsilon=epsilon,
-            binning_mode=binning_mode
+            binning_mode=binning_mode,
+            signal_length=signal_length
         )
 
     # Case 3: Self-Adaptive BSP Loss
@@ -218,6 +220,7 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
         init_weight = params.get('init_weight', 1.0)
         epsilon = params.get('epsilon', 1e-8)
         binning_mode = params.get('binning_mode', 'linear')
+        signal_length = params.get('signal_length', 4000)
 
         return SelfAdaptiveBSPLoss(
             n_bins=n_bins,
@@ -225,7 +228,8 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
             adapt_mode=adapt_mode,
             init_weight=init_weight,
             epsilon=epsilon,
-            binning_mode=binning_mode
+            binning_mode=binning_mode,
+            signal_length=signal_length
         )
 
     # Case 4: Combined Loss (Base + Spectral)
@@ -258,12 +262,14 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
             n_bins = params.get('n_bins', 32)
             epsilon = params.get('epsilon', 1e-8)
             binning_mode = params.get('binning_mode', 'linear')
+            signal_length = params.get('signal_length', 4000)
 
             spectral_loss = BinnedSpectralLoss(
                 n_bins=n_bins,
                 lambda_bsp=1.0,  # Set to 1.0, weight applied in CombinedLoss
                 epsilon=epsilon,
-                binning_mode=binning_mode
+                binning_mode=binning_mode,
+                signal_length=signal_length
             )
 
         elif spectral_loss_type == 'sa_bsp':
@@ -280,6 +286,7 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
             init_weight = params.get('init_weight', 1.0)
             epsilon = params.get('epsilon', 1e-8)
             binning_mode = params.get('binning_mode', 'linear')
+            signal_length = params.get('signal_length', 4000)
 
             spectral_loss = SelfAdaptiveBSPLoss(
                 n_bins=n_bins,
@@ -287,7 +294,8 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
                 adapt_mode=adapt_mode,
                 init_weight=init_weight,
                 epsilon=epsilon,
-                binning_mode=binning_mode
+                binning_mode=binning_mode,
+                signal_length=signal_length
             )
 
         else:

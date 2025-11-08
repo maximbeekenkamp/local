@@ -61,7 +61,8 @@ class BinnedSpectralLoss(nn.Module):
         n_bins: int = 32,
         lambda_bsp: float = 1.0,
         epsilon: float = 1e-8,
-        binning_mode: str = 'linear'
+        binning_mode: str = 'linear',
+        signal_length: int = 4000
     ):
         """
         Initialize Binned Spectral Loss.
@@ -71,6 +72,8 @@ class BinnedSpectralLoss(nn.Module):
             lambda_bsp: Weight for BSP loss (default: 1.0)
             epsilon: Numerical stability constant (default: 1e-8)
             binning_mode: Frequency spacing ('linear' or 'log', default: 'linear')
+            signal_length: Expected signal length in time dimension (default: 4000 for CDON)
+                          Used to pre-compute frequency bin edges for consistency
 
         Raises:
             ValueError: If binning_mode is not 'linear' or 'log'
@@ -79,10 +82,28 @@ class BinnedSpectralLoss(nn.Module):
         self.n_bins = n_bins
         self.lambda_bsp = lambda_bsp
         self.epsilon = epsilon
+        self.signal_length = signal_length
 
         if binning_mode not in ['linear', 'log']:
             raise ValueError(f"binning_mode must be 'linear' or 'log', got {binning_mode}")
         self.binning_mode = binning_mode
+
+        # PRE-COMPUTE frequency bin edges (static, computed once)
+        # This ensures consistency with visualization and avoids recomputation
+        frequencies = torch.fft.rfftfreq(signal_length, dtype=torch.float32)
+        freq_min = frequencies[1]  # Skip DC (frequency = 0)
+        freq_max = frequencies[-1]  # Nyquist frequency
+
+        if binning_mode == 'linear':
+            bin_edges = torch.linspace(freq_min, freq_max, n_bins + 1, dtype=torch.float32)
+        else:  # 'log'
+            bin_edges = torch.logspace(
+                torch.log10(freq_min), torch.log10(freq_max),
+                n_bins + 1, dtype=torch.float32
+            )
+
+        # Register as buffer so it moves with model to GPU/CPU
+        self.register_buffer('bin_edges', bin_edges)
 
         # Bin-specific weights λ_i (BSP paper Algorithm 1, lines 96-97)
         # Default to uniform weighting (all 1s) as per paper's typical use
@@ -190,25 +211,9 @@ class BinnedSpectralLoss(nn.Module):
         # Shape: [n_freqs] = [T//2+1]
         frequencies = torch.fft.rfftfreq(T, device=device, dtype=dtype)
 
-        # Step 2: Create bin edges
-        if self.binning_mode == 'linear':
-            # Linear spacing from 0 to max frequency (0.5 for Nyquist)
-            # Skip DC component (frequency 0) to avoid singularities
-            freq_min = frequencies[1]  # First non-DC frequency
-            freq_max = frequencies[-1]  # Nyquist frequency
-            bin_edges = torch.linspace(
-                freq_min, freq_max, self.n_bins + 1,
-                device=device, dtype=dtype
-            )
-        else:  # 'log'
-            # Logarithmic spacing (better for wide frequency ranges)
-            freq_min = frequencies[1]
-            freq_max = frequencies[-1]
-            bin_edges = torch.logspace(
-                torch.log10(freq_min), torch.log10(freq_max),
-                self.n_bins + 1,
-                device=device, dtype=dtype
-            )
+        # Step 2: Use pre-computed bin edges (already on correct device via buffer)
+        # Bin edges were computed in __init__() and registered as buffer
+        bin_edges = self.bin_edges
 
         # Step 3: HARD BINNING - assign each frequency to exactly one bin
         # frequencies[1:] to skip DC component
