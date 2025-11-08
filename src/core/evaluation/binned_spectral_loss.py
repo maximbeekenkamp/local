@@ -75,8 +75,8 @@ class BinnedSpectralLoss(nn.Module):
             binning_mode: Frequency spacing ('linear' or 'log', default: 'linear')
             signal_length: Expected signal length in time dimension (default: 4000 for CDON)
                           Used to pre-compute frequency bin edges for consistency
-            cache_path: Optional path to precomputed spectrum cache (e.g., 'cache/true_spectrum_256bins.npz')
-                       If provided, loads high-resolution bin edges and downsamples to n_bins
+            cache_path: Optional path to precomputed spectrum cache (e.g., 'cache/true_spectrum.npz')
+                       If provided, loads bin edges and downsamples to n_bins if needed
                        This ensures all BSP instances use identical bin edges derived from real data
 
         Raises:

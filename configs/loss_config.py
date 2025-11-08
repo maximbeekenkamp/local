@@ -180,7 +180,7 @@ BSP_CONFIG = LossConfig(
         'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
-        'cache_path': 'cache/true_spectrum_256bins.npz'  # Load bin edges from precomputed cache
+        'cache_path': 'cache/true_spectrum.npz'  # Load bin edges from precomputed cache
     },
     description='MSE + Binned Spectral Power loss'
 )
@@ -197,7 +197,7 @@ SA_BSP_PERBIN_CONFIG = LossConfig(
         'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
-        'cache_path': 'cache/true_spectrum_256bins.npz'  # Load bin edges from precomputed cache
+        'cache_path': 'cache/true_spectrum.npz'  # Load bin edges from precomputed cache
     },
     description='MSE + SA-BSP (per-bin): 32 adaptive weights with negated gradients'
 )
@@ -214,7 +214,7 @@ SA_BSP_GLOBAL_CONFIG = LossConfig(
         'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
-        'cache_path': 'cache/true_spectrum_256bins.npz'  # Load bin edges from precomputed cache
+        'cache_path': 'cache/true_spectrum.npz'  # Load bin edges from precomputed cache
     },
     description='MSE + SA-BSP (global): 2 adaptive weights (w_mse + w_bsp) with negated gradients'
 )
@@ -231,7 +231,7 @@ SA_BSP_COMBINED_CONFIG = LossConfig(
         'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
-        'cache_path': 'cache/true_spectrum_256bins.npz'  # Load bin edges from precomputed cache
+        'cache_path': 'cache/true_spectrum.npz'  # Load bin edges from precomputed cache
     },
     description='MSE + SA-BSP (combined): 34 weights (w_mse + w_bsp + 32 per-bin, all negated gradients)'
 )
@@ -248,7 +248,7 @@ SA_BSP_FFT_CONFIG = LossConfig(
         'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
-        'cache_path': 'cache/true_spectrum_256bins.npz'  # Load bin edges from precomputed cache
+        'cache_path': 'cache/true_spectrum.npz'  # Load bin edges from precomputed cache
     },
     description='MSE + SA-BSP (FFT): 32 weights optimized in spectral domain with negated gradients'
 )

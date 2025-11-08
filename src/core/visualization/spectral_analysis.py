@@ -12,40 +12,49 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Dict, Tuple, Optional, List
 from pathlib import Path
-from configs.visualization_config import N_BINS_VISUALIZATION, SPECTRUM_CACHE_FILENAME, CACHE_DIR
+from configs.visualization_config import SPECTRUM_CACHE_FILENAME, CACHE_DIR
 
 
 def compute_cached_true_spectrum(
     data: torch.Tensor,
     cache_path: str,
-    n_bins: int = 64,
+    n_bins: int = 32,
     force_recompute: bool = False
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute true spectrum from ALL data and cache to disk.
 
-    Uses all available samples to compute a smooth, accurate reference spectrum.
+    Computes TWO spectra:
+    1. UNBINNED spectrum (full FFT resolution) for smooth visualization
+    2. BINNED spectrum (n_bins) for BSP loss training
+
     Results are cached to avoid recomputation on subsequent runs.
 
     Args:
         data: All data samples [N, C, T] where N is full dataset size
-        cache_path: Path to cache file (e.g., 'cache/true_spectrum_64bins.npz')
-        n_bins: Number of frequency bins (default 64 for visualization)
+        cache_path: Path to cache file (e.g., 'cache/true_spectrum.npz')
+        n_bins: Number of bins for BSP loss training (default: N_BINS_VISUALIZATION)
         force_recompute: If True, recompute even if cache exists
 
     Returns:
-        frequencies: Bin centers [n_bins] (normalized frequency, 0 to 0.5)
-        energy: Power spectrum E(f) [n_bins] averaged over all samples
+        frequencies: Unbinned frequency array [~2000] for visualization
+        energy: Unbinned mean power spectrum [~2000] for visualization
+
+    Cache contains:
+        - unbinned_frequencies, unbinned_energy_mean, unbinned_energy_std (for viz)
+        - bin_edges, bsp_n_bins (for BSP loss training)
 
     Example:
         >>> # First call: computes and caches
-        >>> freq, energy = compute_cached_true_spectrum(all_data, 'cache/spectrum.npz')
-        ⚙️  Computing true spectrum from 1000 samples with 64 bins...
-        💾 Saved true spectrum to cache/spectrum.npz
+        >>> freq, energy = compute_cached_true_spectrum(all_data, 'cache/true_spectrum.npz', n_bins=32)
+        ⚙️  Computing true spectrum from 124 samples...
+        💾 Saved true spectrum to cache/true_spectrum.npz
+           Unbinned: 2000 frequencies for visualization
+           Binned: 32 bins for BSP loss training
 
         >>> # Subsequent calls: loads from cache
-        >>> freq, energy = compute_cached_true_spectrum(all_data, 'cache/spectrum.npz')
-        📂 Loading cached true spectrum from cache/spectrum.npz
+        >>> freq, energy = compute_cached_true_spectrum(all_data, 'cache/true_spectrum.npz')
+        📂 Loading cached true spectrum from cache/true_spectrum.npz
     """
     cache_file = Path(cache_path)
 
@@ -53,16 +62,22 @@ def compute_cached_true_spectrum(
     if cache_file.exists() and not force_recompute:
         print(f"📂 Loading cached true spectrum from {cache_path}")
         cached = np.load(cache_path)
-        return cached['frequencies'], cached['energy']
+        # Return unbinned data for visualization
+        return cached['unbinned_frequencies'], cached['unbinned_energy_mean']
 
     # Compute from ALL data
-    print(f"⚙️  Computing true spectrum from {data.shape[0]} samples with {n_bins} bins...")
-    freq, energy = compute_frequency_spectrum_1d(data, n_bins=n_bins)
+    print(f"⚙️  Computing true spectrum from {data.shape[0]} samples...")
 
-    # Get signal timesteps and compute bin edges for BSP loss consistency
+    # 1. Compute UNBINNED spectrum for visualization (with uncertainty bands)
+    freq_unbinned, energy_mean, energy_std = compute_unbinned_spectrum(data)
+
+    # 2. Compute BINNED spectrum for BSP loss training
+    freq_binned, energy_binned = compute_frequency_spectrum_1d(data, n_bins=n_bins)
+
+    # Get signal timesteps and compute bin edges for BSP loss
     timesteps = data.shape[-1]  # T dimension (e.g., 4000 for CDON)
 
-    # Compute high-resolution bin edges (same logic as BSP loss)
+    # Compute bin edges for BSP loss (same logic as BSP loss)
     frequencies = np.fft.rfftfreq(timesteps)
     freq_min = frequencies[1]  # Skip DC component
     freq_max = frequencies[-1]  # Nyquist frequency
@@ -72,19 +87,24 @@ def compute_cached_true_spectrum(
     cache_file.parent.mkdir(parents=True, exist_ok=True)
     np.savez(
         cache_path,
-        frequencies=freq,  # Bin centers [n_bins]
-        energy=energy,
-        n_bins=n_bins,
+        # Unbinned spectrum for visualization (full FFT resolution)
+        unbinned_frequencies=freq_unbinned,  # [~2000]
+        unbinned_energy_mean=energy_mean,
+        unbinned_energy_std=energy_std,
+        # Binned spectrum for BSP loss training
+        bin_edges=bin_edges,  # [n_bins+1] - for BSP loss consistency
+        bsp_n_bins=n_bins,    # BSP bin count (e.g., 32)
+        # Metadata
         timesteps=timesteps,
-        bin_edges=bin_edges,  # Bin edges [n_bins+1] - for BSP loss consistency
-        freq_min=freq_min,  # Frequency range boundaries
+        freq_min=freq_min,
         freq_max=freq_max
     )
     print(f"💾 Saved true spectrum to {cache_path}")
-    print(f"   Metadata: n_bins={n_bins}, timesteps={timesteps}")
-    print(f"   Bin edges: {n_bins+1} edges from {freq_min:.6f} to {freq_max:.6f}")
+    print(f"   Unbinned: {len(freq_unbinned)} frequencies for visualization")
+    print(f"   Binned: {n_bins} bins for BSP loss training")
+    print(f"   BSP bin edges: {n_bins+1} edges from {freq_min:.6f} to {freq_max:.6f}")
 
-    return freq, energy
+    return freq_unbinned, energy_mean
 
 
 def compute_frequency_spectrum_1d(
@@ -172,6 +192,72 @@ def compute_frequency_spectrum_1d(
             freq_binned[i] = bin_edges[i]
 
     return freq_binned, energy_binned
+
+
+def compute_unbinned_spectrum(
+    signal: torch.Tensor
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Compute unbinned frequency spectrum at full FFT resolution.
+
+    Returns mean spectrum and standard deviation for uncertainty bands.
+    No binning is applied - returns all FFT frequencies directly.
+
+    Args:
+        signal: [B, C, T] tensor where B=batch, C=channels, T=timesteps
+
+    Returns:
+        frequencies: Frequency values [n_freq] (normalized, 0 to 0.5), DC removed
+        mean_energy: Mean power spectrum [n_freq] averaged over batch and channels
+        std_energy: Std dev of power spectrum [n_freq] for uncertainty bands
+
+    Algorithm:
+        1. Apply 1D real FFT to each sample
+        2. Compute power spectrum: |FFT|²
+        3. Average over channels: [B, C, freq] → [B, freq]
+        4. Compute mean and std over batch dimension
+        5. Skip DC component (frequency = 0)
+
+    Example:
+        >>> signal = torch.randn(16, 1, 4000)  # 16 samples
+        >>> freqs, mean, std = compute_unbinned_spectrum(signal)
+        >>> print(freqs.shape)  # (2000,) - full FFT resolution minus DC
+        >>> # Plot with uncertainty band
+        >>> plt.fill_between(freqs, mean - std, mean + std, alpha=0.3)
+        >>> plt.plot(freqs, mean)
+    """
+    # Convert to numpy
+    if isinstance(signal, torch.Tensor):
+        signal_np = signal.cpu().numpy()
+    else:
+        signal_np = signal
+
+    # Get dimensions
+    timesteps = signal_np.shape[-1]
+
+    # FFT → Power for EACH sample (don't average yet!)
+    # Shape: [B, C, T] → [B, C, freq] complex
+    fft_result = np.fft.rfft(signal_np, axis=-1)
+
+    # Compute power spectrum for each sample
+    # Shape: [B, C, freq] complex → [B, C, freq] real
+    power_spectrum_per_sample = np.abs(fft_result) ** 2
+
+    # Average over channels first: [B, C, freq] → [B, freq]
+    # This gives one spectrum per batch sample
+    power_per_sample = power_spectrum_per_sample.mean(axis=1)
+
+    # Get frequency values (skip DC component)
+    frequencies = np.fft.rfftfreq(timesteps)
+    frequencies_no_dc = frequencies[1:]  # Skip DC (frequency = 0)
+    power_no_dc = power_per_sample[:, 1:]  # [B, freq-1]
+
+    # Compute statistics across batch dimension
+    # Shape: [B, freq-1] → [freq-1]
+    mean_energy = power_no_dc.mean(axis=0)
+    std_energy = power_no_dc.std(axis=0)
+
+    return frequencies_no_dc, mean_energy, std_energy
 
 
 def compute_frequency_spectrum_batch(

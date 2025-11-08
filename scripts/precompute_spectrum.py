@@ -22,7 +22,8 @@ sys.path.insert(0, str(project_root))
 from src.core.data_processing.cdon_dataset import CDONDataset
 from src.core.data_processing.cdon_transforms import CDONNormalization
 from src.core.visualization.spectral_analysis import compute_cached_true_spectrum
-from configs.visualization_config import N_BINS_VISUALIZATION, SPECTRUM_CACHE_FILENAME, CACHE_DIR
+from configs.visualization_config import SPECTRUM_CACHE_FILENAME, CACHE_DIR
+from configs.loss_config import BSP_CONFIG
 
 
 def main():
@@ -83,17 +84,22 @@ def main():
     all_targets = torch.cat(all_targets, dim=0)
     print(f"   Loaded shape: {all_targets.shape}")
 
-    # Compute and cache spectrum
-    print(f"\n⚙️  Computing true spectrum with {N_BINS_VISUALIZATION} bins...")
+    # Get BSP n_bins for training
+    bsp_n_bins = BSP_CONFIG.loss_params['n_bins']
+
+    # Compute and cache spectrum (unbinned for viz + binned for BSP)
+    print(f"\n⚙️  Computing spectra...")
+    print(f"   Unbinned: Full FFT resolution (~2000 frequencies) for visualization")
+    print(f"   Binned: {bsp_n_bins} bins for BSP loss training")
     freq, energy = compute_cached_true_spectrum(
         data=all_targets,
         cache_path=str(CACHE_PATH),
-        n_bins=N_BINS_VISUALIZATION,
+        n_bins=bsp_n_bins,
         force_recompute=True
     )
 
     print(f"\n✅ Success!")
-    print(f"   Spectrum shape: {energy.shape}")
+    print(f"   Unbinned spectrum shape: {energy.shape} (visualization)")
     print(f"   Frequency range: [{freq[0]:.6f}, {freq[-1]:.6f}]")
     print(f"   Energy range: [{energy.min():.6e}, {energy.max():.6e}]")
     print(f"\n💾 Cached to: {CACHE_PATH}")

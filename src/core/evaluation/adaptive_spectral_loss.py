@@ -212,8 +212,8 @@ class SelfAdaptiveBSPLoss(nn.Module):
             binning_mode: Frequency spacing ('linear' or 'log', default: 'linear')
             signal_length: Expected signal length in time dimension (default: 4000 for CDON)
                           Used to pre-compute static frequency bin edges for consistency
-            cache_path: Optional path to precomputed spectrum cache (e.g., 'cache/true_spectrum_256bins.npz')
-                       If provided, loads high-resolution bin edges to ensure consistency with visualization
+            cache_path: Optional path to precomputed spectrum cache (e.g., 'cache/true_spectrum.npz')
+                       If provided, loads bin edges to ensure consistency with real data
 
         Note:
             When using SA-BSP in training, you MUST create a separate optimizer
