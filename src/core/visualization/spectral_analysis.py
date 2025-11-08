@@ -59,20 +59,30 @@ def compute_cached_true_spectrum(
     print(f"⚙️  Computing true spectrum from {data.shape[0]} samples with {n_bins} bins...")
     freq, energy = compute_frequency_spectrum_1d(data, n_bins=n_bins)
 
-    # Get signal timesteps for frequency bin edge computation
+    # Get signal timesteps and compute bin edges for BSP loss consistency
     timesteps = data.shape[-1]  # T dimension (e.g., 4000 for CDON)
+
+    # Compute high-resolution bin edges (same logic as BSP loss)
+    frequencies = np.fft.rfftfreq(timesteps)
+    freq_min = frequencies[1]  # Skip DC component
+    freq_max = frequencies[-1]  # Nyquist frequency
+    bin_edges = np.linspace(freq_min, freq_max, n_bins + 1)  # n_bins + 1 edges
 
     # Save to cache with metadata
     cache_file.parent.mkdir(parents=True, exist_ok=True)
     np.savez(
         cache_path,
-        frequencies=freq,
+        frequencies=freq,  # Bin centers [n_bins]
         energy=energy,
         n_bins=n_bins,
-        timesteps=timesteps  # Save signal length for BSP loss bin edge computation
+        timesteps=timesteps,
+        bin_edges=bin_edges,  # Bin edges [n_bins+1] - for BSP loss consistency
+        freq_min=freq_min,  # Frequency range boundaries
+        freq_max=freq_max
     )
     print(f"💾 Saved true spectrum to {cache_path}")
     print(f"   Metadata: n_bins={n_bins}, timesteps={timesteps}")
+    print(f"   Bin edges: {n_bins+1} edges from {freq_min:.6f} to {freq_max:.6f}")
 
     return freq, energy
 

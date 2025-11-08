@@ -62,7 +62,8 @@ class BinnedSpectralLoss(nn.Module):
         lambda_bsp: float = 1.0,
         epsilon: float = 1e-8,
         binning_mode: str = 'linear',
-        signal_length: int = 4000
+        signal_length: int = 4000,
+        cache_path: str = None
     ):
         """
         Initialize Binned Spectral Loss.
@@ -74,6 +75,9 @@ class BinnedSpectralLoss(nn.Module):
             binning_mode: Frequency spacing ('linear' or 'log', default: 'linear')
             signal_length: Expected signal length in time dimension (default: 4000 for CDON)
                           Used to pre-compute frequency bin edges for consistency
+            cache_path: Optional path to precomputed spectrum cache (e.g., 'cache/true_spectrum_256bins.npz')
+                       If provided, loads high-resolution bin edges and downsamples to n_bins
+                       This ensures all BSP instances use identical bin edges derived from real data
 
         Raises:
             ValueError: If binning_mode is not 'linear' or 'log'
@@ -88,19 +92,22 @@ class BinnedSpectralLoss(nn.Module):
             raise ValueError(f"binning_mode must be 'linear' or 'log', got {binning_mode}")
         self.binning_mode = binning_mode
 
-        # PRE-COMPUTE frequency bin edges (static, computed once)
-        # This ensures consistency with visualization and avoids recomputation
-        frequencies = torch.fft.rfftfreq(signal_length, dtype=torch.float32)
-        freq_min = frequencies[1]  # Skip DC (frequency = 0)
-        freq_max = frequencies[-1]  # Nyquist frequency
+        # LOAD bin edges from cache if provided, otherwise compute
+        if cache_path is not None:
+            bin_edges = self._load_bin_edges_from_cache(cache_path, n_bins, binning_mode)
+        else:
+            # Fallback: compute bin edges from signal_length
+            frequencies = torch.fft.rfftfreq(signal_length, dtype=torch.float32)
+            freq_min = frequencies[1]  # Skip DC (frequency = 0)
+            freq_max = frequencies[-1]  # Nyquist frequency
 
-        if binning_mode == 'linear':
-            bin_edges = torch.linspace(freq_min, freq_max, n_bins + 1, dtype=torch.float32)
-        else:  # 'log'
-            bin_edges = torch.logspace(
-                torch.log10(freq_min), torch.log10(freq_max),
-                n_bins + 1, dtype=torch.float32
-            )
+            if binning_mode == 'linear':
+                bin_edges = torch.linspace(freq_min, freq_max, n_bins + 1, dtype=torch.float32)
+            else:  # 'log'
+                bin_edges = torch.logspace(
+                    torch.log10(freq_min), torch.log10(freq_max),
+                    n_bins + 1, dtype=torch.float32
+                )
 
         # Register as buffer so it moves with model to GPU/CPU
         self.register_buffer('bin_edges', bin_edges)
@@ -112,6 +119,90 @@ class BinnedSpectralLoss(nn.Module):
             'bin_weights',
             torch.ones(n_bins, dtype=torch.float32)
         )
+
+    def _load_bin_edges_from_cache(
+        self,
+        cache_path: str,
+        n_bins: int,
+        binning_mode: str
+    ) -> torch.Tensor:
+        """
+        Load high-resolution bin edges from cache and downsample to n_bins.
+
+        This ensures all BSP loss instances use identical bin edges derived
+        from the real data distribution, regardless of their n_bins setting.
+
+        Args:
+            cache_path: Path to precomputed spectrum cache
+            n_bins: Target number of bins
+            binning_mode: 'linear' or 'log' binning
+
+        Returns:
+            Bin edges [n_bins + 1] as torch.Tensor
+
+        Algorithm:
+            1. Load high-resolution bin edges from cache (e.g., 257 edges for 256 bins)
+            2. If n_bins matches cached resolution, use directly
+            3. If n_bins < cached resolution, downsample by selecting evenly spaced edges
+            4. If n_bins > cached resolution, interpolate (rare case)
+        """
+        import numpy as np
+        from pathlib import Path
+
+        cache_file = Path(cache_path)
+        if not cache_file.exists():
+            raise FileNotFoundError(
+                f"Cache file not found: {cache_path}\n"
+                f"Run scripts/precompute_spectrum.py first to generate the cache."
+            )
+
+        # Load cached bin edges
+        cached = np.load(cache_path)
+
+        # Check if bin_edges are in cache (backward compatibility)
+        if 'bin_edges' not in cached:
+            raise ValueError(
+                f"Cache file {cache_path} does not contain 'bin_edges'.\n"
+                f"Re-run scripts/precompute_spectrum.py to regenerate with bin edges."
+            )
+
+        cached_bin_edges = cached['bin_edges']  # [n_bins_cached + 1]
+        cached_n_bins = len(cached_bin_edges) - 1
+
+        # Case 1: Exact match - use directly
+        if n_bins == cached_n_bins:
+            bin_edges = torch.from_numpy(cached_bin_edges).float()
+            print(f"📂 Loaded {n_bins} bin edges from {cache_path}")
+            return bin_edges
+
+        # Case 2: Downsample - select evenly spaced edges
+        elif n_bins < cached_n_bins:
+            # Select n_bins+1 evenly spaced indices from cached edges
+            # This preserves freq_min and freq_max exactly
+            indices = np.linspace(0, cached_n_bins, n_bins + 1, dtype=int)
+            downsampled_edges = cached_bin_edges[indices]
+            bin_edges = torch.from_numpy(downsampled_edges).float()
+            print(f"📂 Loaded and downsampled bin edges: {cached_n_bins} → {n_bins} bins from {cache_path}")
+            return bin_edges
+
+        # Case 3: Upsample (rare) - interpolate
+        else:
+            # Use linear interpolation to create more bins
+            # Preserves freq_min and freq_max
+            freq_min = cached_bin_edges[0]
+            freq_max = cached_bin_edges[-1]
+
+            if binning_mode == 'linear':
+                upsampled_edges = np.linspace(freq_min, freq_max, n_bins + 1)
+            else:  # 'log'
+                upsampled_edges = np.logspace(
+                    np.log10(freq_min), np.log10(freq_max),
+                    n_bins + 1
+                )
+
+            bin_edges = torch.from_numpy(upsampled_edges).float()
+            print(f"⚠️  Upsampled bin edges: {cached_n_bins} → {n_bins} bins (cache resolution lower than requested)")
+            return bin_edges
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """

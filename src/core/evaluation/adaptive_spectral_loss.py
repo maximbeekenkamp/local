@@ -192,7 +192,8 @@ class SelfAdaptiveBSPLoss(nn.Module):
         init_weight: float = 1.0,
         epsilon: float = 1e-8,
         binning_mode: str = 'linear',
-        signal_length: int = 4000
+        signal_length: int = 4000,
+        cache_path: str = None
     ):
         """
         Initialize Self-Adaptive BSP Loss.
@@ -211,6 +212,8 @@ class SelfAdaptiveBSPLoss(nn.Module):
             binning_mode: Frequency spacing ('linear' or 'log', default: 'linear')
             signal_length: Expected signal length in time dimension (default: 4000 for CDON)
                           Used to pre-compute static frequency bin edges for consistency
+            cache_path: Optional path to precomputed spectrum cache (e.g., 'cache/true_spectrum_256bins.npz')
+                       If provided, loads high-resolution bin edges to ensure consistency with visualization
 
         Note:
             When using SA-BSP in training, you MUST create a separate optimizer
@@ -229,7 +232,8 @@ class SelfAdaptiveBSPLoss(nn.Module):
             lambda_bsp=1.0,  # Fixed at 1.0, weighting handled by adaptive layer
             epsilon=epsilon,
             binning_mode=binning_mode,
-            signal_length=signal_length
+            signal_length=signal_length,
+            cache_path=cache_path
         )
 
         # Create adaptive weights
