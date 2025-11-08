@@ -6,7 +6,6 @@ checkpoints
 data
 PHASE_5_*.*
 Reference */
-scripts
 tests
 
 # Python cache
@@ -15,8 +14,4 @@ __pycache__/
 
 # Ignore markdown files in root directory only
 /*.md
-# But allow README.md
-!README.md
 
-# Allow real spectrum generation
-!scripts/precompute_spectrum.py
