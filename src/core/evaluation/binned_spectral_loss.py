@@ -300,11 +300,12 @@ class BinnedSpectralLoss(nn.Module):
         # Step 1: Get frequency values
         # torch.fft.rfftfreq returns normalized frequencies [0, 0.5]
         # Shape: [n_freqs] = [T//2+1]
-        frequencies = torch.fft.rfftfreq(T, device=device, dtype=dtype)
+        # Note: Explicitly move to device to ensure compatibility across PyTorch versions
+        frequencies = torch.fft.rfftfreq(T, dtype=dtype).to(device)
 
         # Step 2: Use pre-computed bin edges (already on correct device via buffer)
         # Bin edges were computed in __init__() and registered as buffer
-        bin_edges = self.bin_edges
+        bin_edges = self.bin_edges.to(device)  # Ensure bin_edges on same device
 
         # Step 3: HARD BINNING - assign each frequency to exactly one bin
         # frequencies[1:] to skip DC component
