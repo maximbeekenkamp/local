@@ -280,22 +280,27 @@ class SimpleTrainer:
 
             # Backward pass
             if self.use_spectral_optimizer:
-                # FFT mode: Model sees combined loss, weights see only spectral loss
-                # Step 1: Model update with combined loss
-                loss.backward(retain_graph=True)  # Keep graph for weight update
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                self.optimizer.step()
+                # FFT mode: Dual-optimizer with spectral-domain weight optimization
+                # Key: Accumulate gradients from both losses BEFORE optimizer.step()
 
-                # Step 2: Weight update with spectral loss only
-                self.weight_optimizer.zero_grad()
-                # Recompute spectral loss component
+                # Step 1: Backward on combined loss (model sees MSE + BSP)
+                loss.backward(retain_graph=True)  # Keep graph for second backward
+
+                # Step 2: Backward on spectral loss ONLY (weights see only BSP)
+                # This accumulates spectral gradients for the weights
                 from ..evaluation.loss_factory import CombinedLoss
                 if isinstance(self.criterion, CombinedLoss):
-                    # Get spectral loss component
+                    # Get spectral loss component and backward
                     loss_spectral = self.criterion.spectral_loss(outputs, targets)
-                    loss_spectral.backward()
-                    # Apply negated gradients (SA-PINNs style)
-                    self._update_adaptive_weights()
+                    loss_spectral.backward()  # Accumulates to weight gradients
+
+                # Step 3: Apply negated gradients to weights (SA-PINNs style)
+                self._update_adaptive_weights()
+
+                # Step 4: Update both model and weights with accumulated gradients
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                self.optimizer.step()
+                self.weight_optimizer.step()
             else:
                 # Standard mode: Single backward pass for both model and weights
                 loss.backward()
