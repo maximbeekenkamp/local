@@ -3,7 +3,7 @@
 .pytest_cache
 archive
 checkpoints
-data
+/data
 PHASE_5_*.*
 Reference */
 tests
