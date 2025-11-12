@@ -115,10 +115,8 @@ class SimpleTrainer:
             )
             # Store adapt_mode for SA-PINNs style optimization
             self.adapt_mode = self.criterion.spectral_loss.adapt_mode
-            # Flag for FFT mode: uses spectral-domain weight optimization
-            self.use_spectral_optimizer = (self.adapt_mode == 'fft')
         else:
-            self.use_spectral_optimizer = False
+            self.adapt_mode = None
 
         # Scheduler setup
         self.scheduler = self._create_scheduler()
@@ -279,35 +277,11 @@ class SimpleTrainer:
             loss = self.criterion(outputs, targets)
 
             # Backward pass
-            if self.use_spectral_optimizer:
-                # FFT mode: Dual-optimizer with spectral-domain weight optimization
-                # Key: Accumulate gradients from both losses BEFORE optimizer.step()
-
-                # Step 1: Backward on combined loss (model sees MSE + BSP)
-                loss.backward(retain_graph=True)  # Keep graph for second backward
-
-                # Step 2: Backward on spectral loss ONLY (weights see only BSP)
-                # This accumulates spectral gradients for the weights
-                from ..evaluation.loss_factory import CombinedLoss
-                if isinstance(self.criterion, CombinedLoss):
-                    # Get spectral loss component and backward
-                    loss_spectral = self.criterion.spectral_loss(outputs, targets)
-                    loss_spectral.backward()  # Accumulates to weight gradients
-
-                # Step 3: Apply negated gradients to weights (SA-PINNs style)
-                self._update_adaptive_weights()
-
-                # Step 4: Update both model and weights with accumulated gradients
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                self.optimizer.step()
-                self.weight_optimizer.step()
-            else:
-                # Standard mode: Single backward pass for both model and weights
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                self.optimizer.step()
-                # Update adaptive weights (SA-PINNs style with negated gradients)
-                self._update_adaptive_weights()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            self.optimizer.step()
+            # Update adaptive weights (SA-PINNs style with negated gradients)
+            self._update_adaptive_weights()
 
             # Step scheduler (for cosine annealing, step every batch)
             if self.config.scheduler_type == 'cosine':

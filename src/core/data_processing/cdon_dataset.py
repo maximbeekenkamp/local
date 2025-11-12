@@ -3,6 +3,9 @@ PyTorch Dataset class for CDON earthquake data.
 
 Loads CDON data (earthquake accelerations → structural displacements),
 applies normalization, and provides data in format expected by neural operators.
+
+Supports causal zero-padding preprocessing to enforce physical causality at the data level,
+matching the reference CausalityDeepONet implementation.
 """
 
 import os
@@ -11,6 +14,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from typing import Optional, Tuple
 from .cdon_transforms import CDONNormalization
+from src.data.preprocessing_utils import prepare_causal_sequence_data
 
 
 class CDONDataset(Dataset):
@@ -21,6 +25,12 @@ class CDONDataset(Dataset):
     applies normalization, and returns tensors with shape [channels=1, timesteps].
 
     Supports train/val/test splits with deterministic validation split from training data.
+
+    Causal Mode:
+        When use_causal_padding=True, applies zero-padding preprocessing to enforce
+        physical causality at the data level (matches reference CausalityDeepONet).
+        Inputs are left-padded with (signal_length - 1) zeros, so output at time t
+        only depends on input up to time t.
     """
 
     def __init__(
@@ -30,7 +40,9 @@ class CDONDataset(Dataset):
         normalize: Optional[CDONNormalization] = None,
         use_dummy: bool = False,
         val_split_ratio: float = 0.2,
-        val_split_seed: int = 42
+        val_split_seed: int = 42,
+        use_causal_padding: bool = True,  # ENABLED BY DEFAULT (matches reference)
+        signal_length: int = 4000
     ):
         """
         Initialize CDON dataset.
@@ -44,10 +56,23 @@ class CDONDataset(Dataset):
             use_dummy: If True, expect dummy data directory structure (informational only)
             val_split_ratio: Fraction of training data to use for validation (default 0.2)
             val_split_seed: Random seed for reproducible train/val split (default 42)
+            use_causal_padding: If True, apply zero-padding for causality (default True)
+                               Matches reference CausalityDeepONet implementation
+                               Suitable for UNet and FNO models
+                               For DeepONet, use prepare_causal_deeponet_data() separately
+                               Set to False to disable (standard preprocessing)
+            signal_length: Original signal length (default 4000)
+                          Used to determine padding amount
 
         Raises:
             FileNotFoundError: If required .npy files don't exist
             ValueError: If split is invalid or data shapes are inconsistent
+
+        Note:
+            When use_causal_padding=True:
+            - Input shape becomes [1, signal_length + (signal_length - 1)]
+            - Output shape remains [1, signal_length]
+            - For signal_length=4000: inputs become [1, 7999], outputs stay [1, 4000]
         """
         self.data_dir = data_dir
         self.split = split
@@ -55,6 +80,8 @@ class CDONDataset(Dataset):
         self.use_dummy = use_dummy
         self.val_split_ratio = val_split_ratio
         self.val_split_seed = val_split_seed
+        self.use_causal_padding = use_causal_padding
+        self.signal_length = signal_length
 
         # Validate split argument
         if split not in ['train', 'val', 'test']:
@@ -147,8 +174,19 @@ class CDONDataset(Dataset):
             idx: Sample index
 
         Returns:
-            Tuple of (input_tensor, target_tensor) each with shape [1, n_timesteps]
-            where 1 is the channel dimension for 1D time series
+            Tuple of (input_tensor, target_tensor)
+
+            Without causal padding:
+                - input_tensor: [1, signal_length]
+                - target_tensor: [1, signal_length]
+
+            With causal padding (use_causal_padding=True):
+                - input_tensor: [1, signal_length + (signal_length - 1)]
+                - target_tensor: [1, signal_length]
+
+            Example for signal_length=4000:
+                - Without padding: inputs [1, 4000], targets [1, 4000]
+                - With padding: inputs [1, 7999], targets [1, 4000]
         """
         # Get sample from numpy arrays
         load = self.loads[idx]  # Shape: [n_timesteps]
@@ -166,6 +204,16 @@ class CDONDataset(Dataset):
         # Add channel dimension: [n_timesteps] -> [1, n_timesteps]
         load_tensor = load_tensor.unsqueeze(0)
         response_tensor = response_tensor.unsqueeze(0)
+
+        # Apply causal zero-padding if enabled
+        if self.use_causal_padding:
+            # Left-pad input with (signal_length - 1) zeros for causality
+            # Uses prepare_causal_sequence_data() which handles the padding
+            load_tensor = prepare_causal_sequence_data(
+                load_tensor,
+                signal_length=self.signal_length
+            )
+            # Note: response_tensor stays as-is (not padded)
 
         return load_tensor, response_tensor
 
@@ -190,7 +238,9 @@ def create_cdon_dataloaders(
     val_split_seed: int = 42,
     stats_path: str = "configs/cdon_stats.json",
     num_workers: int = 0,
-    pin_memory: bool = True
+    pin_memory: bool = True,
+    use_causal_padding: bool = True,  # ENABLED BY DEFAULT (matches reference)
+    signal_length: int = 4000
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
     Factory function to create train, validation, and test DataLoaders.
@@ -207,11 +257,16 @@ def create_cdon_dataloaders(
         stats_path: Path to normalization statistics JSON (default 'configs/cdon_stats.json')
         num_workers: Number of DataLoader workers (default 0 for single-process)
         pin_memory: Whether to pin memory for faster GPU transfer (default True)
+        use_causal_padding: Apply zero-padding for causality (default True)
+                           Matches reference CausalityDeepONet implementation
+                           Set to False to disable (standard preprocessing)
+        signal_length: Original signal length (default 4000)
 
     Returns:
         Tuple of (train_loader, val_loader, test_loader)
 
     Example:
+        >>> # Without causal padding (standard)
         >>> train_loader, val_loader, test_loader = create_cdon_dataloaders(
         ...     data_dir='data/dummy_cdon',
         ...     batch_size=16,
@@ -219,6 +274,18 @@ def create_cdon_dataloaders(
         ... )
         >>> for inputs, targets in train_loader:
         ...     # inputs shape: [16, 1, 4000]
+        ...     # targets shape: [16, 1, 4000]
+        ...     pass
+        >>>
+        >>> # With causal padding (for UNet/FNO)
+        >>> train_loader, val_loader, test_loader = create_cdon_dataloaders(
+        ...     data_dir='data/dummy_cdon',
+        ...     batch_size=16,
+        ...     use_dummy=True,
+        ...     use_causal_padding=True
+        ... )
+        >>> for inputs, targets in train_loader:
+        ...     # inputs shape: [16, 1, 7999]  # Zero-padded
         ...     # targets shape: [16, 1, 4000]
         ...     pass
     """
@@ -232,7 +299,9 @@ def create_cdon_dataloaders(
         normalize=normalizer,
         use_dummy=use_dummy,
         val_split_ratio=val_split_ratio,
-        val_split_seed=val_split_seed
+        val_split_seed=val_split_seed,
+        use_causal_padding=use_causal_padding,
+        signal_length=signal_length
     )
 
     val_dataset = CDONDataset(
@@ -241,7 +310,9 @@ def create_cdon_dataloaders(
         normalize=normalizer,
         use_dummy=use_dummy,
         val_split_ratio=val_split_ratio,
-        val_split_seed=val_split_seed
+        val_split_seed=val_split_seed,
+        use_causal_padding=use_causal_padding,
+        signal_length=signal_length
     )
 
     test_dataset = CDONDataset(
@@ -250,7 +321,9 @@ def create_cdon_dataloaders(
         normalize=normalizer,
         use_dummy=use_dummy,
         val_split_ratio=val_split_ratio,
-        val_split_seed=val_split_seed
+        val_split_seed=val_split_seed,
+        use_causal_padding=use_causal_padding,
+        signal_length=signal_length
     )
 
     # Create DataLoaders

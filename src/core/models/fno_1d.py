@@ -3,6 +3,16 @@ Fourier Neural Operator (FNO) for 1D temporal data.
 
 Wrapper around neuralop's FNO for learning temporal operators
 in the frequency domain (earthquake accelerations → structural displacements).
+
+Causality is enforced through DATA PREPROCESSING (zero-padding), not architectural constraints.
+This matches the reference CausalityDeepONet implementation from the CDON dataset paper.
+
+Input data should be zero-padded using prepare_causal_sequence_data() from
+src.data.preprocessing_utils to ensure output at time t only depends on input up to time t.
+
+Reference:
+- Li et al. "Fourier Neural Operator for Parametric PDEs" (2021)
+- Penwarden et al. "A metalearning approach for physics-informed neural networks" (2023)
 """
 
 import torch
@@ -31,8 +41,17 @@ class FNO1D(nn.Module):
         3. IFFT: Transform back to time domain
         4. Skip connection: Add to original
 
-    Input shape: [batch, 1, 4000]
-    Output shape: [batch, 1, 4000]
+    Causality:
+        Physical causality is enforced through DATA PREPROCESSING (zero-padding),
+        NOT through architectural constraints. This matches the reference
+        CausalityDeepONet paper implementation.
+
+        The input data should be zero-padded such that output at time t only
+        uses information from times [0, ..., t]. Use prepare_causal_sequence_data()
+        from src.data.preprocessing_utils.
+
+    Input shape: [batch, 1, signal_length]
+    Output shape: [batch, 1, signal_length]
 
     Reference: Li et al. "Fourier Neural Operator for Parametric Partial
                Differential Equations" (2021)
@@ -51,13 +70,18 @@ class FNO1D(nn.Module):
 
         Args:
             n_modes: Number of Fourier modes to keep (low-frequency, default 28)
-            hidden_channels: Hidden channel dimension (default 52)
+            hidden_channels: Hidden channel dimension (default 60)
             n_layers: Number of FNO layers (default 4)
             in_channels: Number of input channels (default 1)
             out_channels: Number of output channels (default 1)
 
         Raises:
             ImportError: If neuralop is not installed
+
+        Note:
+            For causal operation, preprocess inputs with prepare_causal_sequence_data()
+            from src.data.preprocessing_utils. This left-pads inputs with zeros to
+            enforce causality at the data level.
         """
         super().__init__()
 
@@ -92,17 +116,18 @@ class FNO1D(nn.Module):
         """
         Forward pass through FNO.
 
-        The neuralop FNO handles:
-        - Real FFT (rfft) for efficiency
-        - Mode truncation (keeping only n_modes low frequencies)
-        - Spectral convolution with learnable weights
-        - Inverse FFT (irfft) back to time domain
+        Operations:
+            - Global FFT over entire sequence
+            - Spectral convolution with learned weights
+            - Inverse FFT back to time domain
 
         Args:
-            x: Input tensor of shape [batch, 1, timesteps]
+            x: Input tensor of shape [batch, channels, timesteps]
+               For causal operation, should be zero-padded via
+               prepare_causal_sequence_data() preprocessing
 
         Returns:
-            Output tensor of shape [batch, 1, timesteps]
+            Output tensor of shape [batch, channels, timesteps]
         """
         return self.fno(x)
 

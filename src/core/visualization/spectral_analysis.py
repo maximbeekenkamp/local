@@ -12,7 +12,36 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Dict, Tuple, Optional, List
 from pathlib import Path
-from configs.visualization_config import SPECTRUM_CACHE_FILENAME, CACHE_DIR
+from configs.visualization_config import (
+    SPECTRUM_CACHE_FILENAME,
+    CACHE_DIR,
+    SAMPLING_RATE_HZ,
+    NYQUIST_FREQ_HZ,
+    N_BINS_VISUALIZATION,
+    FREQ_RANGE_HZ
+)
+
+
+def normalized_freq_to_hz(freq_normalized: np.ndarray) -> np.ndarray:
+    """
+    Convert normalized frequency [0, 0.5] to Hz [0, 25].
+
+    For CDON dataset:
+    - Sampling rate: 50 Hz
+    - Nyquist frequency: 25 Hz (at normalized freq = 0.5)
+
+    Args:
+        freq_normalized: Normalized frequency array [0, 0.5]
+
+    Returns:
+        freq_hz: Frequency in Hz [0, 25]
+
+    Example:
+        >>> freq_norm = np.array([0.0, 0.25, 0.5])
+        >>> freq_hz = normalized_freq_to_hz(freq_norm)
+        >>> print(freq_hz)  # [0.0, 12.5, 25.0]
+    """
+    return freq_normalized * SAMPLING_RATE_HZ
 
 
 def compute_cached_true_spectrum(
@@ -371,11 +400,14 @@ def plot_spectral_bias_comparison(
     # Always use N_BINS_VISUALIZATION for smooth, high-resolution visualization (independent of n_bins parameter)
     cache_dir = Path(save_path).parent / CACHE_DIR if save_path else Path(CACHE_DIR)
     cache_path = cache_dir / SPECTRUM_CACHE_FILENAME
-    freq_gt, mean_gt = compute_cached_true_spectrum(
+    freq_gt_norm, mean_gt = compute_cached_true_spectrum(
         ground_truth,
         cache_path=str(cache_path),
         n_bins=N_BINS_VISUALIZATION  # High resolution for smooth visualization
     )
+
+    # Convert normalized frequency to Hz for visualization
+    freq_gt = normalized_freq_to_hz(freq_gt_norm)
 
     ax.plot(freq_gt, mean_gt, 'k-', linewidth=2, label='True', zorder=10)
 
@@ -385,14 +417,18 @@ def plot_spectral_bias_comparison(
         display_name = display_names.get(model_name.lower(), model_name.upper())
 
         if show_uncertainty:
-            freq, mean_energy, std_energy = compute_frequency_spectrum_batch(
+            freq_norm, mean_energy, std_energy = compute_frequency_spectrum_batch(
                 pred, n_bins=n_bins
             )
+            # Convert to Hz
+            freq = normalized_freq_to_hz(freq_norm)
             # Shaded uncertainty band
             ax.fill_between(freq, mean_energy - std_energy, mean_energy + std_energy,
                            alpha=0.3, color=color)
         else:
-            freq, mean_energy = compute_frequency_spectrum_1d(pred, n_bins=n_bins)
+            freq_norm, mean_energy = compute_frequency_spectrum_1d(pred, n_bins=n_bins)
+            # Convert to Hz
+            freq = normalized_freq_to_hz(freq_norm)
 
         # Model prediction line
         ax.plot(freq, mean_energy, color=color, linewidth=2,
@@ -403,14 +439,15 @@ def plot_spectral_bias_comparison(
     ax.set_yscale('log')
 
     # Labels and formatting
-    ax.set_xlabel('Normalized Frequency', fontsize=12)
+    ax.set_xlabel('Frequency (Hz)', fontsize=12)
     ax.set_ylabel('Power Spectrum E(f)', fontsize=12)
     ax.set_title(title, fontsize=14, fontweight='bold')
     ax.legend(loc='best', fontsize=10)
     ax.grid(True, alpha=0.3, which='both')
 
-    # Set reasonable axis limits
-    ax.set_xlim(freq_gt[1], freq_gt[-1])  # Skip DC component
+    # Set frequency range to 0-25Hz (dataset paper range)
+    # Skip very low frequencies (< 0.1 Hz) for better log-scale visualization
+    ax.set_xlim(0.1, NYQUIST_FREQ_HZ)  # 0.1 Hz to 25 Hz
 
     plt.tight_layout()
 

@@ -97,6 +97,18 @@ class LossConfig:
             - cache_path (str): Path to precomputed spectrum cache for loading bin edges (optional)
             - adapt_mode (str): For SA-BSP, weight adaptation mode (default: 'per-bin')
             - init_weight (float): For SA-BSP, initial weight value (default: 1.0)
+
+        Penalty Loss Parameters (Optional - applies to all loss types):
+            - use_penalty (bool): Apply inverse-variance penalty weighting (default: False)
+                                 From reference: loss *= 1 / (max(abs(target))² + ε)
+                                 Emphasizes samples with larger responses
+            - penalty_epsilon (float): Numerical stability for penalty (default: 1e-8)
+            - penalty_per_sample (bool): Compute penalty per sample (True) or global (False)
+                                        (default: True)
+
+        Reference:
+            Penalty weighting from Penwarden et al. "A metalearning approach for
+            physics-informed neural networks" (2023), CausalityDeepONet implementation.
     """
     loss_type: str
     loss_params: Dict[str, Any] = field(default_factory=dict)
@@ -175,14 +187,16 @@ BSP_CONFIG = LossConfig(
     loss_params={
         'base_loss': 'relative_l2',
         'spectral_loss': 'bsp',
-        'lambda_spectral': 0.1,  # Paper's Airfoil value (Table 4, Page 26)
+        'mu': 1.0,  # μ from paper (Table 4 - turbulence cases)
         'n_bins': 32,
-        'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
+        'epsilon': 1e-8,  # Paper default
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
-        'cache_path': 'cache/true_spectrum.npz'  # Load bin edges from precomputed cache
+        'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
+        'lambda_k_mode': 'k_squared',  # λ_k = k² from paper Table 4
+        'use_log': False
     },
-    description='MSE + Binned Spectral Power loss'
+    description='MSE + BSP (μ=1.0, λ_k=k²) - Paper Table 4 turbulence'
 )
 
 SA_BSP_PERBIN_CONFIG = LossConfig(
@@ -197,9 +211,11 @@ SA_BSP_PERBIN_CONFIG = LossConfig(
         'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
-        'cache_path': 'cache/true_spectrum.npz'  # Load bin edges from precomputed cache
+        'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
+        'lambda_k_mode': 'k_squared',  # λ_k = k² initialization for trainable weights
+        'use_log': False  # Standard energy (not log10)
     },
-    description='MSE + SA-BSP (per-bin): 32 adaptive weights with negated gradients'
+    description='MSE + SA-BSP (per-bin): 32 trainable λ_k weights (init: k²) - Paper Table 4'
 )
 
 SA_BSP_GLOBAL_CONFIG = LossConfig(
@@ -214,9 +230,11 @@ SA_BSP_GLOBAL_CONFIG = LossConfig(
         'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
-        'cache_path': 'cache/true_spectrum.npz'  # Load bin edges from precomputed cache
+        'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
+        'lambda_k_mode': 'k_squared',  # λ_k = k² (static for global mode)
+        'use_log': False  # Standard energy (not log10)
     },
-    description='MSE + SA-BSP (global): 2 adaptive weights (w_mse + w_bsp) with negated gradients'
+    description='MSE + SA-BSP (global): 2 trainable weights [w_mse=1.0, w_bsp=1.0] - competitive dynamics'
 )
 
 SA_BSP_COMBINED_CONFIG = LossConfig(
@@ -231,26 +249,28 @@ SA_BSP_COMBINED_CONFIG = LossConfig(
         'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
-        'cache_path': 'cache/true_spectrum.npz'  # Load bin edges from precomputed cache
+        'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
+        'lambda_k_mode': 'k_squared',  # λ_k = k² initialization for per-bin weights
+        'use_log': False  # Standard energy (not log10)
     },
-    description='MSE + SA-BSP (combined): 34 weights (w_mse + w_bsp + 32 per-bin, all negated gradients)'
+    description='MSE + SA-BSP (combined): 34 trainable weights [w_mse=1.0, w_bsp=1.0, 32×λ_k=k²]'
 )
 
-SA_BSP_FFT_CONFIG = LossConfig(
+LOG_BSP_CONFIG = LossConfig(
     loss_type='combined',
     loss_params={
         'base_loss': 'relative_l2',
-        'spectral_loss': 'sa_bsp',
-        'lambda_spectral': 0.1,  # Paper's Airfoil value (Table 4, Page 26)
+        'spectral_loss': 'bsp',
+        'mu': 1.0,  # μ = 1.0 for log variant
         'n_bins': 32,
-        'adapt_mode': 'fft',  # Spectral-domain weight optimization
-        'init_weight': 1.0,
-        'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
+        'epsilon': 1e-8,
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
-        'cache_path': 'cache/true_spectrum.npz'  # Load bin edges from precomputed cache
+        'cache_path': 'cache/true_spectrum.npz',
+        'lambda_k_mode': 'uniform',  # λ_k = 1 for all bins (log variant)
+        'use_log': True  # Log10 transform of energies
     },
-    description='MSE + SA-BSP (FFT): 32 weights optimized in spectral domain with negated gradients'
+    description='MSE + Log-BSP: log₁₀(E) with uniform λ_k=1 - Paper log variant'
 )
 
 # Legacy alias for backward compatibility

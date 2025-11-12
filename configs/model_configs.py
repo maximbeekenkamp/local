@@ -23,12 +23,15 @@ class DeepONetConfig:
         latent_dim: Dimension of latent space for branch-trunk combination
         branch_layers: Hidden layer sizes for branch network
         trunk_layers: Hidden layer sizes for trunk network
+        activation: Activation function type ('requ', 'tanh', 'relu', 'siren')
+                   'requ' (ReLU²) is the reference implementation default
     """
 
     sensor_dim: int = 4000
     latent_dim: int = 100
     branch_layers: List[int] = field(default_factory=lambda: [50, 100])
     trunk_layers: List[int] = field(default_factory=lambda: [100, 100])
+    activation: str = 'requ'  # Reference default: ReQU (ReLU squared)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary."""
@@ -83,7 +86,8 @@ class DeepONetConfig:
             f"  sensor_dim={self.sensor_dim},\n"
             f"  latent_dim={self.latent_dim},\n"
             f"  branch_layers={self.branch_layers},\n"
-            f"  trunk_layers={self.trunk_layers}\n"
+            f"  trunk_layers={self.trunk_layers},\n"
+            f"  activation='{self.activation}'\n"
             f")"
         )
 

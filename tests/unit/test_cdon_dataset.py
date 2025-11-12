@@ -27,7 +27,7 @@ class TestCDONDatasetLength:
         dataset = CDONDataset(
             data_dir='data/dummy_cdon',
             split='train',
-            transform=None,
+            normalize=None,
             val_split_ratio=0.2,
             val_split_seed=42
         )
@@ -38,7 +38,7 @@ class TestCDONDatasetLength:
         dataset = CDONDataset(
             data_dir='data/dummy_cdon',
             split='val',
-            transform=None,
+            normalize=None,
             val_split_ratio=0.2,
             val_split_seed=42
         )
@@ -49,7 +49,7 @@ class TestCDONDatasetLength:
         dataset = CDONDataset(
             data_dir='data/dummy_cdon',
             split='test',
-            transform=None
+            normalize=None
         )
         assert len(dataset) == 44, f"Expected 44 test samples, got {len(dataset)}"
 
@@ -61,7 +61,7 @@ class TestCDONDatasetLength:
         dataset = CDONDataset(
             data_dir='CDONData',
             split='train',
-            transform=None,
+            normalize=None,
             val_split_ratio=0.2,
             val_split_seed=42
         )
@@ -72,11 +72,12 @@ class TestCDONDatasetGetItem:
     """Test that __getitem__ returns correct shapes and types."""
 
     def test_getitem_shape_without_transform(self):
-        """Verify __getitem__ returns tensors with shape [1, 4000] without normalization."""
+        """Verify __getitem__ returns correct shapes without normalization (causal padding enabled by default)."""
         dataset = CDONDataset(
             data_dir='data/dummy_cdon',
             split='train',
-            transform=None
+            normalize=None
+            # use_causal_padding=True by default
         )
 
         input_tensor, target_tensor = dataset[0]
@@ -85,8 +86,10 @@ class TestCDONDatasetGetItem:
         assert isinstance(input_tensor, torch.Tensor), "Input should be torch.Tensor"
         assert isinstance(target_tensor, torch.Tensor), "Target should be torch.Tensor"
 
-        # Check shapes
-        assert input_tensor.shape == (1, 4000), f"Expected shape [1, 4000], got {input_tensor.shape}"
+        # Check shapes (with causal padding: input is padded, target is not)
+        expected_input_len = 4000 + (4000 - 1)  # signal_length + padding = 7999
+        assert input_tensor.shape == (1, expected_input_len), \
+            f"Expected shape [1, {expected_input_len}] (causal padding), got {input_tensor.shape}"
         assert target_tensor.shape == (1, 4000), f"Expected shape [1, 4000], got {target_tensor.shape}"
 
         # Check dtype
@@ -94,32 +97,39 @@ class TestCDONDatasetGetItem:
         assert target_tensor.dtype == torch.float32, "Target should be float32"
 
     def test_getitem_shape_with_transform(self):
-        """Verify __getitem__ returns correct shapes with normalization."""
-        transform = CDONNormalization(stats_path='configs/cdon_stats.json')
+        """Verify __getitem__ returns correct shapes with normalization (causal padding enabled by default)."""
+        normalizer = CDONNormalization(stats_path='configs/cdon_stats.json')
         dataset = CDONDataset(
             data_dir='data/dummy_cdon',
             split='train',
-            transform=transform
+            normalize=normalizer
+            # use_causal_padding=True by default
         )
 
         input_tensor, target_tensor = dataset[0]
 
-        assert input_tensor.shape == (1, 4000), f"Expected shape [1, 4000], got {input_tensor.shape}"
+        # Check shapes (with causal padding)
+        expected_input_len = 4000 + (4000 - 1)  # signal_length + padding = 7999
+        assert input_tensor.shape == (1, expected_input_len), \
+            f"Expected shape [1, {expected_input_len}] (causal padding), got {input_tensor.shape}"
         assert target_tensor.shape == (1, 4000), f"Expected shape [1, 4000], got {target_tensor.shape}"
 
     def test_multiple_samples_access(self):
-        """Verify can access multiple samples sequentially."""
+        """Verify can access multiple samples sequentially (causal padding enabled by default)."""
         dataset = CDONDataset(
             data_dir='data/dummy_cdon',
             split='test',
-            transform=None
+            normalize=None
+            # use_causal_padding=True by default
         )
 
         # Access first 5 samples
+        expected_input_len = 4000 + (4000 - 1)  # signal_length + padding = 7999
         for i in range(5):
             input_tensor, target_tensor = dataset[i]
-            assert input_tensor.shape == (1, 4000)
-            assert target_tensor.shape == (1, 4000)
+            assert input_tensor.shape == (1, expected_input_len), \
+                f"Expected input shape [1, {expected_input_len}] (causal padding)"
+            assert target_tensor.shape == (1, 4000), "Expected target shape [1, 4000]"
 
 
 class TestCDONNormalization:
@@ -186,11 +196,12 @@ class TestNormalizedDataStatistics:
 
     def test_normalized_data_statistics_dummy(self):
         """Verify normalized dummy data has mean≈0, std≈1."""
-        transform = CDONNormalization(stats_path='configs/cdon_stats.json')
+        normalizer = CDONNormalization(stats_path='configs/cdon_stats.json')
         dataset = CDONDataset(
             data_dir='data/dummy_cdon',
             split='train',
-            transform=transform
+            normalize=normalizer,
+            use_causal_padding=False  # Disable to test pure normalization
         )
 
         # Collect all inputs and targets
@@ -224,11 +235,12 @@ class TestNormalizedDataStatistics:
         if not os.path.exists('CDONData/train_Loads.npy'):
             pytest.skip("Real CDON data not available")
 
-        transform = CDONNormalization(stats_path='configs/cdon_stats.json')
+        normalizer = CDONNormalization(stats_path='configs/cdon_stats.json')
         dataset = CDONDataset(
             data_dir='CDONData',
             split='train',
-            transform=transform
+            normalize=normalizer,
+            use_causal_padding=False  # Disable to test pure normalization
         )
 
         # Collect all data
@@ -259,42 +271,53 @@ class TestDataLoaderBatching:
     """Test that DataLoader produces correct batch shapes."""
 
     def test_dataloader_batch_shapes(self):
-        """Verify DataLoader produces batches with shape [B, 1, 4000]."""
+        """Verify DataLoader produces batches with correct shapes (causal padding enabled by default)."""
         train_loader, val_loader, test_loader = create_cdon_dataloaders(
             data_dir='data/dummy_cdon',
             batch_size=8,
             use_dummy=True,
             num_workers=0
+            # use_causal_padding=True by default
         )
+
+        # Expected shapes with causal padding
+        expected_input_len = 4000 + (4000 - 1)  # signal_length + padding = 7999
 
         # Test train loader
         inputs, targets = next(iter(train_loader))
-        assert inputs.shape == (8, 1, 4000), f"Expected [8, 1, 4000], got {inputs.shape}"
+        assert inputs.shape == (8, 1, expected_input_len), \
+            f"Expected [8, 1, {expected_input_len}] (causal padding), got {inputs.shape}"
         assert targets.shape == (8, 1, 4000), f"Expected [8, 1, 4000], got {targets.shape}"
 
         # Test val loader
         inputs, targets = next(iter(val_loader))
-        assert inputs.shape == (8, 1, 4000), f"Expected [8, 1, 4000], got {inputs.shape}"
+        assert inputs.shape == (8, 1, expected_input_len), \
+            f"Expected [8, 1, {expected_input_len}] (causal padding), got {inputs.shape}"
         assert targets.shape == (8, 1, 4000), f"Expected [8, 1, 4000], got {targets.shape}"
 
         # Test test loader
         inputs, targets = next(iter(test_loader))
-        assert inputs.shape == (8, 1, 4000), f"Expected [8, 1, 4000], got {inputs.shape}"
+        assert inputs.shape == (8, 1, expected_input_len), \
+            f"Expected [8, 1, {expected_input_len}] (causal padding), got {inputs.shape}"
         assert targets.shape == (8, 1, 4000), f"Expected [8, 1, 4000], got {targets.shape}"
 
     def test_dataloader_different_batch_sizes(self):
-        """Verify DataLoader works with different batch sizes."""
+        """Verify DataLoader works with different batch sizes (causal padding enabled by default)."""
+        expected_input_len = 4000 + (4000 - 1)  # signal_length + padding = 7999
+
         for batch_size in [4, 16, 32]:
             train_loader, _, _ = create_cdon_dataloaders(
                 data_dir='data/dummy_cdon',
                 batch_size=batch_size,
                 use_dummy=True,
                 num_workers=0
+                # use_causal_padding=True by default
             )
 
             inputs, targets = next(iter(train_loader))
             assert inputs.shape[0] == batch_size, f"Batch size should be {batch_size}"
-            assert inputs.shape == (batch_size, 1, 4000)
+            assert inputs.shape == (batch_size, 1, expected_input_len), \
+                f"Expected [{batch_size}, 1, {expected_input_len}] (causal padding)"
 
     def test_dataloader_iteration_complete(self):
         """Verify can iterate through entire DataLoader."""
@@ -333,7 +356,7 @@ class TestDummyAndRealDataCompatibility:
         dummy_dataset = CDONDataset(
             data_dir='data/dummy_cdon',
             split='train',
-            transform=None
+            normalize=None
         )
 
         # Check if real data exists
@@ -344,7 +367,7 @@ class TestDummyAndRealDataCompatibility:
         real_dataset = CDONDataset(
             data_dir='CDONData',
             split='train',
-            transform=None
+            normalize=None
         )
 
         # Both should have same length (80 after split)
@@ -359,17 +382,20 @@ class TestDummyAndRealDataCompatibility:
         assert dummy_target.shape == real_target.shape, "Shapes should match"
 
     def test_dataloaders_work_with_both_sources(self):
-        """Verify DataLoader factory works with both dummy and real data."""
+        """Verify DataLoader factory works with both dummy and real data (causal padding enabled by default)."""
         # Test with dummy data
         dummy_train, dummy_val, dummy_test = create_cdon_dataloaders(
             data_dir='data/dummy_cdon',
             batch_size=8,
             use_dummy=True,
             num_workers=0
+            # use_causal_padding=True by default
         )
 
         dummy_inputs, dummy_targets = next(iter(dummy_train))
-        assert dummy_inputs.shape == (8, 1, 4000)
+        expected_input_len = 4000 + (4000 - 1)  # signal_length + padding = 7999
+        assert dummy_inputs.shape == (8, 1, expected_input_len), \
+            f"Expected [8, 1, {expected_input_len}] (causal padding)"
 
         # Test with real data if available
         if os.path.exists('CDONData/train_Loads.npy'):

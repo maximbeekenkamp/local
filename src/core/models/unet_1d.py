@@ -3,6 +3,16 @@ UNet architecture for 1D temporal data.
 
 Implements encoder-decoder with skip connections for learning
 temporal mappings (earthquake accelerations → structural displacements).
+
+Causality is enforced through DATA PREPROCESSING (zero-padding), not architectural constraints.
+This matches the reference CausalityDeepONet implementation from the CDON dataset paper.
+
+Input data should be zero-padded using prepare_causal_sequence_data() from
+src.data.preprocessing_utils to ensure output at time t only depends on input up to time t.
+
+Reference:
+- Ronneberger et al. "U-Net: Convolutional Networks for Biomedical Image Segmentation" (2015)
+- Penwarden et al. "A metalearning approach for physics-informed neural networks" (2023)
 """
 
 import torch
@@ -14,6 +24,7 @@ class ConvBlock1D(nn.Module):
     """
     Convolutional block with GroupNorm and GELU activation.
 
+    Standard convolution with symmetric padding.
     Used as building block for encoder and decoder.
     """
 
@@ -37,12 +48,14 @@ class ConvBlock1D(nn.Module):
         """
         super().__init__()
 
+        # Standard convolution (symmetric padding)
         self.conv = nn.Conv1d(
             in_channels,
             out_channels,
             kernel_size=kernel_size,
             padding=padding
         )
+
         self.norm = nn.GroupNorm(num_groups, out_channels)
         self.activation = nn.GELU()
 
@@ -64,8 +77,17 @@ class UNet1D(nn.Module):
         - 3 decoder levels: ConvTranspose1d + skip connections + Conv1d blocks
         - Skip connections via concatenation
 
-    Input shape: [batch, 1, 4000]
-    Output shape: [batch, 1, 4000]
+    Causality:
+        Physical causality is enforced through DATA PREPROCESSING (zero-padding),
+        NOT through architectural constraints. This matches the reference
+        CausalityDeepONet paper implementation.
+
+        The input data should be zero-padded such that output at time t only
+        uses information from times [0, ..., t]. Use prepare_causal_sequence_data()
+        from src.data.preprocessing_utils.
+
+    Input shape: [batch, 1, signal_length]
+    Output shape: [batch, 1, signal_length]
 
     Reference: Ronneberger et al. "U-Net: Convolutional Networks for Biomedical
                Image Segmentation" (2015), adapted for 1D temporal data
@@ -86,10 +108,15 @@ class UNet1D(nn.Module):
         Args:
             in_channels: Number of input channels (default 1)
             out_channels: Number of output channels (default 1)
-            base_channels: Base channel count, doubled at each level (default 28)
+            base_channels: Base channel count, doubled at each level (default 40)
             num_levels: Number of encoder/decoder levels (default 3)
             kernel_size: Convolution kernel size (default 3)
             num_groups: Groups for GroupNorm (default 4)
+
+        Note:
+            For causal operation, preprocess inputs with prepare_causal_sequence_data()
+            from src.data.preprocessing_utils. This left-pads inputs with zeros to
+            enforce causality at the data level.
         """
         super().__init__()
 
@@ -101,9 +128,6 @@ class UNet1D(nn.Module):
         self.num_groups = num_groups
 
         # Calculate channel counts for each level
-        # Level 0: base_channels (28)
-        # Level 1: base_channels * 2 (56)
-        # Level 2: base_channels * 4 (112)
         self.encoder_channels = [base_channels * (2 ** i) for i in range(num_levels)]
         self.decoder_channels = self.encoder_channels[::-1]  # Reverse for decoder
 
@@ -139,7 +163,6 @@ class UNet1D(nn.Module):
                 )
             )
 
-            # Max pooling for downsampling (stride=2)
             self.pooling_layers.append(nn.MaxPool1d(kernel_size=2, stride=2))
 
         # Bottleneck
@@ -176,7 +199,6 @@ class UNet1D(nn.Module):
 
             # Decoder convolution block
             # Input: upsampled features + skip connection (concatenated)
-            # Skip connection comes from encoder at same spatial resolution
             # Skip has encoder_channels[num_levels - 1 - i] channels
             skip_idx = num_levels - 1 - i
             skip_channels = self.encoder_channels[skip_idx]
@@ -184,7 +206,7 @@ class UNet1D(nn.Module):
 
             self.decoder_blocks.append(
                 ConvBlock1D(
-                    decoder_input_channels,  # Upsampled + skip
+                    decoder_input_channels,
                     dec_out_channels,
                     kernel_size=kernel_size,
                     padding=kernel_size // 2,
@@ -196,7 +218,7 @@ class UNet1D(nn.Module):
         self.output_conv = nn.Conv1d(
             base_channels,
             out_channels,
-            kernel_size=1  # 1x1 convolution
+            kernel_size=1  
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -244,10 +266,5 @@ class UNet1D(nn.Module):
         return x
 
     def count_parameters(self) -> int:
-        """
-        Count total number of trainable parameters.
-
-        Returns:
-            Total parameter count
-        """
+        """Count total number of trainable parameters."""
         return sum(p.numel() for p in self.parameters() if p.requires_grad)

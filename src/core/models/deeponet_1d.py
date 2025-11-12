@@ -3,6 +3,13 @@ DeepONet architecture for 1D temporal operator learning.
 
 Implements branch-trunk decomposition for learning operators mapping
 input functions (earthquake accelerations) to output functions (structural displacements).
+
+Causality is enforced through DATA PREPROCESSING (zero-padding), not architectural constraints.
+This matches the reference CausalityDeepONet implementation from the CDON dataset paper.
+
+Reference:
+- Lu et al. "Learning nonlinear operators via DeepONet" (2021)
+- Penwarden et al. "A metalearning approach for physics-informed neural networks (PINNs)" (2023)
 """
 
 import torch
@@ -16,12 +23,24 @@ except ImportError:
     SIREN_AVAILABLE = False
 
 
+class ReQU(nn.Module):
+    """
+    ReQU activation: ReLU squared (ReLU(x)²).
+
+    Used in reference CausalityDeepONet implementation.
+    More smooth than ReLU, helps with gradient flow.
+    """
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.relu(x) ** 2
+
+
 class MLP(nn.Module):
     """
     Multi-layer perceptron with configurable hidden layers and activation functions.
 
     Supports:
-    - 'siren': Sinusoidal activation (default, requires siren-pytorch)
+    - 'requ': ReQU (ReLU²) activation (reference implementation default)
+    - 'siren': Sinusoidal activation (requires siren-pytorch)
     - 'tanh': Tanh activation (stable for operator learning)
     - 'relu': ReLU activation
     """
@@ -31,7 +50,7 @@ class MLP(nn.Module):
         in_features: int,
         out_features: int,
         hidden_layers: List[int],
-        activation: str = 'tanh'
+        activation: str = 'requ'
     ):
         """
         Initialize MLP.
@@ -40,7 +59,7 @@ class MLP(nn.Module):
             in_features: Input dimension
             out_features: Output dimension
             hidden_layers: List of hidden layer sizes
-            activation: Activation function type ('tanh', 'relu', 'siren')
+            activation: Activation function type ('requ', 'tanh', 'relu', 'siren')
 
         Raises:
             ValueError: If activation type is not supported
@@ -95,14 +114,16 @@ class MLP(nn.Module):
         Raises:
             ValueError: If activation type is not supported
         """
-        if self.activation_type == 'tanh':
+        if self.activation_type == 'requ':
+            return ReQU
+        elif self.activation_type == 'tanh':
             return nn.Tanh
         elif self.activation_type == 'relu':
             return nn.ReLU
         else:
             raise ValueError(
                 f"Unsupported activation: '{self.activation_type}'. "
-                f"Supported: 'tanh', 'relu', 'siren'"
+                f"Supported: 'requ', 'tanh', 'relu', 'siren'"
             )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -115,14 +136,24 @@ class DeepONet1D(nn.Module):
     DeepONet for 1D temporal operator learning.
 
     Architecture:
-        - Branch network: Encodes input function u(t) into latent representation
-        - Trunk network: Learns basis functions at query points
+        - Branch network: MLP that encodes input function u(t) into latent representation
+        - Trunk network: MLP that learns basis functions at query points
         - Combination: Element-wise product + sum to predict output
+
+    Causality:
+        Physical causality is enforced through DATA PREPROCESSING (zero-padding),
+        NOT through architectural constraints. This matches the reference
+        CausalityDeepONet paper implementation.
+
+        The input data should be zero-padded such that for each output timestep t,
+        the branch network only receives information from times [0, ..., t].
 
     Input shape: [batch, 1, timesteps]
     Output shape: [batch, 1, timesteps]
 
-    Reference: Lu et al. "Learning nonlinear operators via DeepONet" (2021)
+    References:
+        - Lu et al. "Learning nonlinear operators via DeepONet" (2021)
+        - Penwarden et al. "A metalearning approach for physics-informed neural networks" (2023)
     """
 
     def __init__(
@@ -131,7 +162,7 @@ class DeepONet1D(nn.Module):
         latent_dim: int = 100,
         branch_layers: List[int] = None,
         trunk_layers: List[int] = None,
-        activation: str = 'siren'
+        activation: str = 'requ'
     ):
         """
         Initialize DeepONet1D.
@@ -139,20 +170,25 @@ class DeepONet1D(nn.Module):
         Args:
             sensor_dim: Number of input timesteps (default 4000 for CDON)
             latent_dim: Dimension of latent space (default 100)
-            branch_layers: Hidden layer sizes for branch network (default [50, 100])
-            trunk_layers: Hidden layer sizes for trunk network (default [100, 100])
-            activation: Activation function type ('tanh', 'relu', 'siren', default 'siren')
+            branch_layers: Hidden layer sizes for branch network (default [120, 120])
+                          Matches reference implementation
+            trunk_layers: Hidden layer sizes for trunk network (default [120, 120])
+                         Matches reference implementation
+            activation: Activation function type (default 'requ' - ReLU²)
+                       Options: 'requ', 'tanh', 'relu', 'siren'
+                       Reference uses 'requ' (ReLU squared)
         """
         super().__init__()
 
         self.sensor_dim = sensor_dim
         self.latent_dim = latent_dim
-        self.branch_layers = branch_layers or [50, 100]
-        self.trunk_layers = trunk_layers or [100, 100]
+        self.branch_layers = branch_layers or [120, 120]  # Reference default
+        self.trunk_layers = trunk_layers or [120, 120]    # Reference default
         self.activation = activation
 
-        # Branch network: processes input function
+        # Branch network: Standard MLP processes input function
         # Input: [batch, sensor_dim] → Output: [batch, latent_dim]
+        # Causality enforced through zero-padded input data
         self.branch = MLP(
             in_features=sensor_dim,
             out_features=latent_dim,

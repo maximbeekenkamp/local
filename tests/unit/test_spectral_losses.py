@@ -55,19 +55,27 @@ def test_bsp_loss_initialization():
     # Default parameters
     loss = BinnedSpectralLoss()
     assert loss.n_bins == 32
-    assert loss.lambda_bsp == 1.0
+    assert loss.mu == 1.0  # Renamed from mu
     assert loss.epsilon == 1e-8
     assert loss.binning_mode == 'linear'
+    assert loss.lambda_k_mode == 'k_squared'  # Default from paper
+    assert loss.use_log == False  # Default: standard energy
 
     # Custom parameters
-    loss = BinnedSpectralLoss(n_bins=16, lambda_bsp=0.5, binning_mode='log')
+    loss = BinnedSpectralLoss(n_bins=16, mu=0.5, binning_mode='linear', lambda_k_mode='uniform', use_log=True)
     assert loss.n_bins == 16
-    assert loss.lambda_bsp == 0.5
-    assert loss.binning_mode == 'log'
+    assert loss.mu == 0.5
+    assert loss.binning_mode == 'linear'
+    assert loss.lambda_k_mode == 'uniform'
+    assert loss.use_log == True
 
     # Invalid binning mode
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="binning_mode"):
         BinnedSpectralLoss(binning_mode='invalid')
+
+    # Invalid lambda_k_mode
+    with pytest.raises(ValueError, match="lambda_k_mode"):
+        BinnedSpectralLoss(lambda_k_mode='invalid')
 
 
 def test_bsp_loss_forward_shape(sample_prediction, sample_signal):
@@ -83,7 +91,7 @@ def test_bsp_loss_forward_shape(sample_prediction, sample_signal):
 def test_bsp_loss_identical_inputs():
     """Test BSP loss is zero for identical inputs."""
     signal = torch.randn(4, 1, 1000)
-    loss_fn = BinnedSpectralLoss(n_bins=32, lambda_bsp=1.0)
+    loss_fn = BinnedSpectralLoss(n_bins=32, mu=1.0)
     loss = loss_fn(signal, signal)
 
     # Should be very close to zero (not exactly due to numerical precision)
@@ -177,9 +185,9 @@ def test_bsp_loss_frequency_analysis(sample_prediction, sample_signal):
 
 
 def test_bsp_loss_lambda_weighting(sample_prediction, sample_signal):
-    """Test lambda_bsp weight is applied correctly."""
-    loss_1 = BinnedSpectralLoss(n_bins=32, lambda_bsp=1.0)
-    loss_2 = BinnedSpectralLoss(n_bins=32, lambda_bsp=2.0)
+    """Test mu weight is applied correctly."""
+    loss_1 = BinnedSpectralLoss(n_bins=32, mu=1.0)
+    loss_2 = BinnedSpectralLoss(n_bins=32, mu=2.0)
 
     val_1 = loss_1(sample_prediction, sample_signal)
     val_2 = loss_2(sample_prediction, sample_signal)
@@ -208,7 +216,7 @@ def test_combined_loss_initialization():
 def test_combined_loss_forward(sample_prediction, sample_signal):
     """Test combined loss computation."""
     base = RelativeL2Loss()
-    spectral = BinnedSpectralLoss(n_bins=32, lambda_bsp=1.0)
+    spectral = BinnedSpectralLoss(n_bins=32, mu=1.0)
     combined = CombinedLoss(base, spectral, lambda_spectral=1.0)
 
     # Compute combined loss
@@ -227,7 +235,7 @@ def test_combined_loss_forward(sample_prediction, sample_signal):
 def test_combined_loss_components(sample_prediction, sample_signal):
     """Test get_loss_components method."""
     base = RelativeL2Loss()
-    spectral = BinnedSpectralLoss(n_bins=32, lambda_bsp=1.0)
+    spectral = BinnedSpectralLoss(n_bins=32, mu=1.0)
     combined = CombinedLoss(base, spectral, lambda_spectral=2.0)
 
     components = combined.get_loss_components(sample_prediction, sample_signal)
@@ -273,13 +281,13 @@ def test_loss_factory_bsp():
     """Test factory creates BinnedSpectralLoss."""
     config = LossConfig(
         loss_type='bsp',
-        loss_params={'n_bins': 16, 'lambda_bsp': 2.0}
+        loss_params={'n_bins': 16, 'mu': 2.0}
     )
     loss = create_loss(config)
 
     assert isinstance(loss, BinnedSpectralLoss)
     assert loss.n_bins == 16
-    assert loss.lambda_bsp == 2.0
+    assert loss.mu == 2.0
 
 
 def test_loss_factory_combined():
@@ -510,7 +518,7 @@ def test_sa_bsp_loss_vs_bsp(sample_prediction, sample_signal):
     )
 
     # Regular BSP
-    bsp_loss = BinnedSpectralLoss(n_bins=32, lambda_bsp=1.0)
+    bsp_loss = BinnedSpectralLoss(n_bins=32, mu=1.0)
 
     # Should produce similar results (not exact due to implementation details)
     sa_val = sa_bsp_loss(sample_prediction, sample_signal)
@@ -697,7 +705,7 @@ def test_bsp_loss_training_simulation():
     # Create simple model (linear layer)
     model = torch.nn.Linear(1000, 1000)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    loss_fn = BinnedSpectralLoss(n_bins=32, lambda_bsp=1.0)
+    loss_fn = BinnedSpectralLoss(n_bins=32, mu=1.0)
 
     # Generate data
     input_signal = torch.randn(8, 1, 1000)
@@ -731,7 +739,7 @@ def test_combined_loss_training_simulation():
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     base_loss = RelativeL2Loss()
-    spectral_loss = BinnedSpectralLoss(n_bins=32, lambda_bsp=1.0)
+    spectral_loss = BinnedSpectralLoss(n_bins=32, mu=1.0)
     combined_loss = CombinedLoss(base_loss, spectral_loss, lambda_spectral=1.0)
 
     input_signal = torch.randn(8, 1, 1000)

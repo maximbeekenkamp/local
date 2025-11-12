@@ -1,7 +1,7 @@
 """
 Model factory for creating neural operator models.
 
-Provides centralized model instantiation for DeepONet, FNO, and UNet architectures.
+Provides centralized model instantiation for model architectures.
 """
 
 import torch.nn as nn
@@ -147,28 +147,12 @@ def _create_unet(config: Dict[str, Any]) -> UNet1D:
 
 
 def list_available_models() -> list:
-    """
-    Get list of available model architectures.
-
-    Returns:
-        List of model architecture names
-    """
+    """Get list of available model architectures."""
     return ['deeponet', 'fno', 'unet']
 
 
 def get_model_info(arch: str) -> Dict[str, Any]:
-    """
-    Get information about a model architecture.
-
-    Args:
-        arch: Model architecture name
-
-    Returns:
-        Dictionary with model information
-
-    Raises:
-        ValueError: If arch is not recognized
-    """
+    """Get information about a model architecture."""
     arch = arch.lower()
 
     info = {

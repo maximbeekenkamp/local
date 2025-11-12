@@ -77,8 +77,8 @@ class SelfAdaptiveWeights(nn.Module):
     optimization to naturally discover hard-to-fit frequency bins.
 
     Attributes:
-        n_components: Number of weight components (e.g., n_bins for per-bin/fft modes)
-        mode: Weight adaptation mode ('per-bin', 'global', 'combined', 'fft', 'none')
+        n_components: Number of weight components (e.g., n_bins for per-bin mode)
+        mode: Weight adaptation mode ('per-bin', 'global', 'combined', 'none')
         weights: Trainable weights (parameters)
     """
 
@@ -86,7 +86,7 @@ class SelfAdaptiveWeights(nn.Module):
         self,
         n_components: int,
         mode: str = 'per-bin',
-        init_value: float = 1.0
+        init_values: torch.Tensor = None
     ):
         """
         Initialize adaptive weights.
@@ -94,17 +94,18 @@ class SelfAdaptiveWeights(nn.Module):
         Args:
             n_components: Number of weight components
                 - For 'per-bin': n_components = n_bins
-                - For 'fft': n_components = n_bins (spectral-domain optimization)
-                - For 'global': n_components = 1
+                - For 'global': n_components = 2
                 - For 'combined': n_components = n_bins + 2
                 - For 'none': No parameters (fixed weights)
             mode: Weight adaptation strategy
                 - 'per-bin': Independent weight per frequency bin (default)
-                - 'global': Single weight for MSE/BSP balance
-                - 'combined': Global MSE/BSP balance × per-bin frequency weights
-                - 'fft': Per-bin weights optimized in spectral domain (via dual-optimizer)
+                - 'global': Dual weights [w_mse, w_bsp] for MSE/BSP balance
+                - 'combined': Global [w_mse, w_bsp] + per-bin [λ_k] weights
                 - 'none': Fixed unit weights (equivalent to BSP)
-            init_value: Initial weight value (default: 1.0)
+            init_values: Initial weight values as tensor (default: ones if None)
+                - For per-bin: [λ_k] (n_bins,) initialized from paper's λ_k
+                - For global: [1.0, 1.0] (2,) for [w_mse, w_bsp]
+                - For combined: [1.0, 1.0, λ_k...] (n_bins+2,)
 
         Note:
             Following SA-PINNs, weights are stored as RAW values (not log-space)
@@ -115,19 +116,29 @@ class SelfAdaptiveWeights(nn.Module):
         self.n_components = n_components
         self.mode = mode
 
-        valid_modes = ['per-bin', 'global', 'combined', 'fft', 'none']
+        valid_modes = ['per-bin', 'global', 'combined', 'none']
         if mode not in valid_modes:
             raise ValueError(f"mode must be one of {valid_modes}, got {mode}")
+
+        # Set default initialization if not provided
+        if init_values is None:
+            init_values = torch.ones(n_components, dtype=torch.float32)
+        else:
+            # Ensure correct shape
+            if init_values.shape[0] != n_components:
+                raise ValueError(
+                    f"init_values shape {init_values.shape} doesn't match "
+                    f"n_components {n_components}"
+                )
+            init_values = init_values.clone().float()
 
         # Initialize raw weights (SA-PINNs style)
         if mode == 'none':
             # No trainable parameters, use fixed weights
-            self.register_buffer('weights', torch.ones(n_components))
+            self.register_buffer('weights', init_values)
         else:
             # Trainable parameters (raw weights, no log-space)
-            self.weights = nn.Parameter(
-                torch.full((n_components,), init_value, dtype=torch.float32)
-            )
+            self.weights = nn.Parameter(init_values)
 
     def forward(self) -> torch.Tensor:
         """
@@ -193,7 +204,9 @@ class SelfAdaptiveBSPLoss(nn.Module):
         epsilon: float = 1e-8,
         binning_mode: str = 'linear',
         signal_length: int = 4000,
-        cache_path: str = None
+        cache_path: str = None,
+        lambda_k_mode: str = 'k_squared',
+        use_log: bool = False
     ):
         """
         Initialize Self-Adaptive BSP Loss.
@@ -205,7 +218,6 @@ class SelfAdaptiveBSPLoss(nn.Module):
                 - 'per-bin': Independent weight per bin (32 weights)
                 - 'global': Dual weights for MSE/BSP balance (2 weights: w_mse + w_bsp)
                 - 'combined': MSE/BSP balance + per-bin (34 weights: w_mse + w_bsp + 32 per-bin)
-                - 'fft': Spectral-domain optimization with per-bin weights (32 weights, dual-optimizer in trainer)
                 - 'none': Fixed unit weights (degenerates to BSP)
             init_weight: Initial weight value (default: 1.0)
             epsilon: Numerical stability constant (default: 1e-8)
@@ -214,6 +226,10 @@ class SelfAdaptiveBSPLoss(nn.Module):
                           Used to pre-compute static frequency bin edges for consistency
             cache_path: Optional path to precomputed spectrum cache (e.g., 'cache/true_spectrum.npz')
                        If provided, loads bin edges to ensure consistency with real data
+            lambda_k_mode: Per-bin weight mode (λ_k from paper):
+                - 'k_squared': λ_k = k² (paper Table 4, turbulence - default)
+                - 'uniform': λ_k = 1 (paper Table 4, airfoil)
+            use_log: Apply log10 to energies (log BSP variant, default: False)
 
         Note:
             When using SA-BSP in training, you MUST create a separate optimizer
@@ -226,28 +242,43 @@ class SelfAdaptiveBSPLoss(nn.Module):
         self.adapt_mode = adapt_mode
         self.epsilon = epsilon
 
-        # Create underlying BSP module (lambda=1.0, will be weighted by adaptive weights)
+        # Create underlying BSP module (μ=1.0, will be weighted by adaptive weights)
         self.bsp_module = BinnedSpectralLoss(
             n_bins=n_bins,
-            lambda_bsp=1.0,  # Fixed at 1.0, weighting handled by adaptive layer
+            mu=1.0,  # Fixed at 1.0, weighting handled by adaptive layer
             epsilon=epsilon,
             binning_mode=binning_mode,
             signal_length=signal_length,
-            cache_path=cache_path
+            cache_path=cache_path,
+            lambda_k_mode=lambda_k_mode,
+            use_log=use_log
         )
 
-        # Create adaptive weights
+        # Create adaptive weights with proper initialization
+        # Initialize based on mode (per user's specification)
         if adapt_mode == 'global':
-            n_components = 2  # [w_mse, w_bsp] for competitive dynamics
+            # 2 weights: [w_mse=1.0, w_bsp=1.0]
+            n_components = 2
+            init_values = torch.tensor([1.0, 1.0], dtype=torch.float32)
         elif adapt_mode == 'combined':
-            n_components = n_bins + 2  # [w_mse, w_bsp, w1, w2, ..., w_n_bins] for full competitive dynamics
-        else:  # 'per-bin', 'fft', or 'none'
+            # 34 weights: [w_mse=1.0, w_bsp=1.0, 32×λ_k=k²]
+            n_components = n_bins + 2
+            w_global = torch.tensor([1.0, 1.0], dtype=torch.float32)
+            lambda_k = self.bsp_module.bin_weights.clone()  # λ_k from BSP (k² or uniform)
+            init_values = torch.cat([w_global, lambda_k])
+        elif adapt_mode == 'per-bin':
+            # 32 weights: λ_k initialized from BSP module (k² or uniform)
             n_components = n_bins
+            init_values = self.bsp_module.bin_weights.clone()
+        else:  # 'none'
+            # Fixed weights (no training)
+            n_components = n_bins
+            init_values = torch.ones(n_bins, dtype=torch.float32)
 
         self.adaptive_weights = SelfAdaptiveWeights(
             n_components=n_components,
             mode=adapt_mode,
-            init_value=init_weight
+            init_values=init_values
         )
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -276,11 +307,10 @@ class SelfAdaptiveBSPLoss(nn.Module):
         weights = weights.to(bin_errors.device)  # Ensure same device
 
         # Step 3: Apply adaptive weighting based on mode
-        if self.adapt_mode == 'per-bin' or self.adapt_mode == 'fft':
+        if self.adapt_mode == 'per-bin':
             # Direct per-bin weighting
             # weights: [n_bins], bin_errors: [n_bins]
             # Uses SA-PINNs style: emphasize high-error bins via competitive dynamics
-            # FFT mode: Same weight structure as per-bin, but trainer uses dual-optimizer
             weighted_errors = weights * bin_errors
             sa_bsp_loss = weighted_errors.mean()
 
@@ -337,7 +367,7 @@ class SelfAdaptiveBSPLoss(nn.Module):
             weights = weights.to(bin_errors.device)  # Ensure same device
 
             # Apply weighting
-            if self.adapt_mode == 'per-bin' or self.adapt_mode == 'fft':
+            if self.adapt_mode == 'per-bin':
                 weighted_errors = weights * bin_errors
             elif self.adapt_mode == 'global':
                 weighted_errors = weights[0] * bin_errors

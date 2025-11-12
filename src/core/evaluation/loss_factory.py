@@ -30,6 +30,7 @@ from typing import Dict, Any, Union
 
 from configs.loss_config import LossConfig
 from .metrics import RelativeL2Loss
+from .penalty_loss import PenaltyWeightedLoss, MSEWithPenalty
 
 
 class CombinedLoss(nn.Module):
@@ -175,10 +176,18 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
     loss_type = config.loss_type
     params = config.loss_params
 
+    # Extract penalty parameter (optional)
+    use_penalty = params.get('use_penalty', False)
+    penalty_epsilon = params.get('penalty_epsilon', 1e-8)
+    penalty_per_sample = params.get('penalty_per_sample', True)
+
+    # Create base loss
+    base_loss = None
+
     # Case 1: Relative L2 Loss (baseline)
     if loss_type == 'relative_l2':
         epsilon = params.get('epsilon', 1e-8)
-        return RelativeL2Loss(epsilon=epsilon)
+        base_loss = RelativeL2Loss(epsilon=epsilon)
 
     # Case 2: Binned Spectral Power (BSP) Loss
     elif loss_type == 'bsp':
@@ -191,19 +200,23 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
             )
 
         n_bins = params.get('n_bins', 32)
-        lambda_bsp = params.get('lambda_bsp', 1.0)
+        mu = params.get('mu', 1.0)
         epsilon = params.get('epsilon', 1e-8)
         binning_mode = params.get('binning_mode', 'linear')
         signal_length = params.get('signal_length', 4000)
         cache_path = params.get('cache_path', None)
+        lambda_k_mode = params.get('lambda_k_mode', 'k_squared')
+        use_log = params.get('use_log', False)
 
-        return BinnedSpectralLoss(
+        base_loss = BinnedSpectralLoss(
             n_bins=n_bins,
-            lambda_bsp=lambda_bsp,
+            mu=mu,
             epsilon=epsilon,
             binning_mode=binning_mode,
             signal_length=signal_length,
-            cache_path=cache_path
+            cache_path=cache_path,
+            lambda_k_mode=lambda_k_mode,
+            use_log=use_log
         )
 
     # Case 3: Self-Adaptive BSP Loss
@@ -225,7 +238,7 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
         signal_length = params.get('signal_length', 4000)
         cache_path = params.get('cache_path', None)
 
-        return SelfAdaptiveBSPLoss(
+        base_loss = SelfAdaptiveBSPLoss(
             n_bins=n_bins,
             lambda_sa=lambda_sa,
             adapt_mode=adapt_mode,
@@ -268,14 +281,18 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
             binning_mode = params.get('binning_mode', 'linear')
             signal_length = params.get('signal_length', 4000)
             cache_path = params.get('cache_path', None)
+            lambda_k_mode = params.get('lambda_k_mode', 'k_squared')
+            use_log = params.get('use_log', False)
 
             spectral_loss = BinnedSpectralLoss(
                 n_bins=n_bins,
-                lambda_bsp=1.0,  # Set to 1.0, weight applied in CombinedLoss
+                mu=1.0,  # Set to 1.0, weight applied in CombinedLoss
                 epsilon=epsilon,
                 binning_mode=binning_mode,
                 signal_length=signal_length,
-                cache_path=cache_path
+                cache_path=cache_path,
+                lambda_k_mode=lambda_k_mode,
+                use_log=use_log
             )
 
         elif spectral_loss_type == 'sa_bsp':
@@ -294,6 +311,8 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
             binning_mode = params.get('binning_mode', 'linear')
             signal_length = params.get('signal_length', 4000)
             cache_path = params.get('cache_path', None)
+            lambda_k_mode = params.get('lambda_k_mode', 'k_squared')
+            use_log = params.get('use_log', False)
 
             spectral_loss = SelfAdaptiveBSPLoss(
                 n_bins=n_bins,
@@ -303,7 +322,9 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
                 epsilon=epsilon,
                 binning_mode=binning_mode,
                 signal_length=signal_length,
-                cache_path=cache_path
+                cache_path=cache_path,
+                lambda_k_mode=lambda_k_mode,
+                use_log=use_log
             )
 
         else:
@@ -316,7 +337,7 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
         lambda_spectral = params.get('lambda_spectral', 1.0)
 
         # Create combined loss
-        return CombinedLoss(
+        base_loss = CombinedLoss(
             base_loss=base_loss,
             spectral_loss=spectral_loss,
             lambda_spectral=lambda_spectral
@@ -327,6 +348,16 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
             f"Unknown loss_type: {loss_type}. "
             f"Must be one of: 'relative_l2', 'bsp', 'sa_bsp', 'combined'"
         )
+
+    # Apply penalty weighting if requested
+    if use_penalty:
+        return PenaltyWeightedLoss(
+            base_loss=base_loss,
+            epsilon=penalty_epsilon,
+            per_sample=penalty_per_sample
+        )
+    else:
+        return base_loss
 
 
 def create_loss_from_dict(config_dict: Dict[str, Any]) -> nn.Module:
