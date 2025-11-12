@@ -9,7 +9,7 @@ Reference */
 tests
 
 # Python cache
-__pycache__/
+# __pycache__/
 .ipynb_checkpoints/
 
 # Ignore markdown files in root directory only
