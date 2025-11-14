@@ -12,21 +12,25 @@ from pathlib import Path
 
 def markdown_cell(source):
     """Create a markdown cell."""
+    lines = source.split("\n")
+    # Add newline character to all lines except the last one
     return {
         "cell_type": "markdown",
         "metadata": {},
-        "source": source.split("\n")
+        "source": [line + "\n" if i < len(lines) - 1 else line for i, line in enumerate(lines)]
     }
 
 
 def code_cell(source):
     """Create a code cell."""
+    lines = source.split("\n")
+    # Add newline character to all lines except the last one
     return {
         "cell_type": "code",
         "execution_count": None,
         "metadata": {},
         "outputs": [],
-        "source": source.split("\n")
+        "source": [line + "\n" if i < len(lines) - 1 else line for i, line in enumerate(lines)]
     }
 
 
