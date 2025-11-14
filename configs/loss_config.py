@@ -15,25 +15,23 @@ Example configurations:
         loss_params={}
     )
 
-    # BSP Loss (MSE + Spectral)
+    # BSP Loss (MSE + Spectral, weighting controlled by μ=1.0)
     loss_config = LossConfig(
         loss_type='combined',
         loss_params={
-            'base_loss': 'relative_l2',
+            'base_loss': 'field_error',
             'spectral_loss': 'bsp',
-            'lambda_spectral': 1.0,
             'n_bins': 32,
             'epsilon': 1e-8
         }
     )
 
-    # SA-BSP Loss (MSE + Adaptive Spectral)
+    # SA-BSP Loss (MSE + Adaptive Spectral, weighting controlled by μ=1.0)
     loss_config = LossConfig(
         loss_type='combined',
         loss_params={
-            'base_loss': 'relative_l2',
+            'base_loss': 'field_error',
             'spectral_loss': 'sa_bsp',
-            'lambda_spectral': 1.0,
             'n_bins': 32,
             'adapt_mode': 'per-bin',
             'epsilon': 1e-8
@@ -185,7 +183,7 @@ BASELINE_CONFIG = LossConfig(
 BSP_CONFIG = LossConfig(
     loss_type='combined',
     loss_params={
-        'base_loss': 'relative_l2',
+        'base_loss': 'field_error',
         'spectral_loss': 'bsp',
         'mu': 1.0,  # μ from paper (Table 4 - turbulence cases)
         'n_bins': 32,
@@ -194,17 +192,19 @@ BSP_CONFIG = LossConfig(
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
         'lambda_k_mode': 'k_squared',  # λ_k = k² from paper Table 4
-        'use_log': False
+        'use_log': False,  # Standard energy (not log10)
+        'use_output_norm': True,  # Per-batch output normalization: y = (y - mean) / std
+        'use_minmax_norm': True,  # Per-sample min-max normalization of binned energies
+        'loss_type': 'mspe'  # Mean Squared Percentage Error (matches BSP paper Algorithm 1)
     },
-    description='MSE + BSP (μ=1.0, λ_k=k²) - Paper Table 4 turbulence'
+    description='MSE + BSP (μ=1.0, λ_k=k²) with normalization - Paper Table 4 turbulence'
 )
 
 SA_BSP_PERBIN_CONFIG = LossConfig(
     loss_type='combined',
     loss_params={
-        'base_loss': 'relative_l2',
+        'base_loss': 'field_error',
         'spectral_loss': 'sa_bsp',
-        'lambda_spectral': 0.1,  # Paper's Airfoil value (Table 4, Page 26)
         'n_bins': 32,
         'adapt_mode': 'per-bin',  # 32 trainable weights (one per bin)
         'init_weight': 1.0,
@@ -213,17 +213,19 @@ SA_BSP_PERBIN_CONFIG = LossConfig(
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
         'lambda_k_mode': 'k_squared',  # λ_k = k² initialization for trainable weights
-        'use_log': False  # Standard energy (not log10)
+        'use_log': False,  # Standard energy (not log10)
+        'use_output_norm': True,  # Per-batch output normalization
+        'use_minmax_norm': True,  # Per-sample min-max normalization
+        'loss_type': 'mspe'  # Mean Squared Percentage Error
     },
-    description='MSE + SA-BSP (per-bin): 32 trainable λ_k weights (init: k²) - Paper Table 4'
+    description='MSE + SA-BSP (per-bin): 32 trainable λ_k weights (init: k²) with normalization - Paper Table 4'
 )
 
 SA_BSP_GLOBAL_CONFIG = LossConfig(
     loss_type='combined',
     loss_params={
-        'base_loss': 'relative_l2',
+        'base_loss': 'field_error',
         'spectral_loss': 'sa_bsp',
-        'lambda_spectral': 0.1,  # Paper's Airfoil value (Table 4, Page 26)
         'n_bins': 32,
         'adapt_mode': 'global',  # 2 trainable weights (w_mse + w_bsp) for MSE/BSP balance
         'init_weight': 1.0,
@@ -232,17 +234,19 @@ SA_BSP_GLOBAL_CONFIG = LossConfig(
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
         'lambda_k_mode': 'k_squared',  # λ_k = k² (static for global mode)
-        'use_log': False  # Standard energy (not log10)
+        'use_log': False,  # Standard energy (not log10)
+        'use_output_norm': True,  # Per-batch output normalization
+        'use_minmax_norm': True,  # Per-sample min-max normalization
+        'loss_type': 'mspe'  # Mean Squared Percentage Error
     },
-    description='MSE + SA-BSP (global): 2 trainable weights [w_mse=1.0, w_bsp=1.0] - competitive dynamics'
+    description='MSE + SA-BSP (global): 2 trainable weights [w_mse=1.0, w_bsp=1.0] with normalization - competitive dynamics'
 )
 
 SA_BSP_COMBINED_CONFIG = LossConfig(
     loss_type='combined',
     loss_params={
-        'base_loss': 'relative_l2',
+        'base_loss': 'field_error',
         'spectral_loss': 'sa_bsp',
-        'lambda_spectral': 0.1,  # Paper's Airfoil value (Table 4, Page 26)
         'n_bins': 32,
         'adapt_mode': 'combined',  # 34 weights: w_mse + w_bsp + 32 per-bin
         'init_weight': 1.0,
@@ -251,15 +255,18 @@ SA_BSP_COMBINED_CONFIG = LossConfig(
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
         'lambda_k_mode': 'k_squared',  # λ_k = k² initialization for per-bin weights
-        'use_log': False  # Standard energy (not log10)
+        'use_log': False,  # Standard energy (not log10)
+        'use_output_norm': True,  # Per-batch output normalization
+        'use_minmax_norm': True,  # Per-sample min-max normalization
+        'loss_type': 'mspe'  # Mean Squared Percentage Error
     },
-    description='MSE + SA-BSP (combined): 34 trainable weights [w_mse=1.0, w_bsp=1.0, 32×λ_k=k²]'
+    description='MSE + SA-BSP (combined): 34 trainable weights [w_mse=1.0, w_bsp=1.0, 32×λ_k=k²] with normalization'
 )
 
 LOG_BSP_CONFIG = LossConfig(
     loss_type='combined',
     loss_params={
-        'base_loss': 'relative_l2',
+        'base_loss': 'field_error',
         'spectral_loss': 'bsp',
         'mu': 1.0,  # μ = 1.0 for log variant
         'n_bins': 32,
@@ -268,9 +275,12 @@ LOG_BSP_CONFIG = LossConfig(
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',
         'lambda_k_mode': 'uniform',  # λ_k = 1 for all bins (log variant)
-        'use_log': True  # Log10 transform of energies
+        'use_log': True,  # Log10 transform of energies
+        'use_output_norm': True,  # Per-batch output normalization: y = (y - mean) / std
+        'use_minmax_norm': True,  # Per-sample min-max normalization: (E - min) / (max - min + eps)
+        'loss_type': 'l2_norm'  # L2 norm loss (matches reference screenshot implementation)
     },
-    description='MSE + Log-BSP: log₁₀(E) with uniform λ_k=1 - Paper log variant'
+    description='MSE + Log-BSP: log₁₀(E) with per-sample min-max norm + L2 loss - Reference implementation'
 )
 
 # Legacy alias for backward compatibility

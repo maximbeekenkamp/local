@@ -28,30 +28,41 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.core.models.model_factory import create_model
-from src.core.data_processing.cdon_dataset import CDONDataset
+from src.core.data_processing.cdon_dataset import create_cdon_dataloaders
 from src.core.data_processing.cdon_transforms import CDONNormalization
 from src.core.training.simple_trainer import SimpleTrainer
 from configs.training_config import TrainingConfig
 from configs.loss_config import BASELINE_CONFIG, BSP_CONFIG, SA_BSP_CONFIG
 
 
-def create_dataloaders(
+def create_dual_dataloaders(
     data_dir: str,
-    batch_size: int = 16,
+    arch: str,
+    batch_size_per_timestep: int = 32,
+    batch_size_sequence: int = 4,
     num_workers: int = 4,
     use_dummy: bool = False
 ) -> tuple:
     """
-    Create train and validation dataloaders.
+    Create dual dataloaders for dual-batch training.
+
+    Uses create_cdon_dataloaders() factory to create per-timestep and sequence loaders.
+    - Per-timestep loader: [N*T, 4000] samples with time coordinates (shuffled)
+    - Sequence loader:
+      * DeepONet: [N, T, 4000] causal zero-padded sequences (NOT shuffled)
+      * FNO/UNet: [N, 1, 4000] full sequences (NOT shuffled)
 
     Args:
         data_dir: Path to data directory
-        batch_size: Batch size for training
+        arch: Model architecture ('deeponet', 'fno', or 'unet')
+        batch_size_per_timestep: Batch size for per-timestep loader
+        batch_size_sequence: Batch size for sequence loader
         num_workers: Number of dataloader workers
         use_dummy: Whether to use dummy data
 
     Returns:
-        Tuple of (train_loader, val_loader)
+        Tuple of (per_timestep_train_loader, per_timestep_val_loader,
+                  sequence_train_loader, sequence_val_loader)
     """
     # Determine data path
     if use_dummy:
@@ -62,44 +73,26 @@ def create_dataloaders(
     if not data_path.exists():
         raise FileNotFoundError(f"Data directory not found: {data_path}")
 
-    # Create normalization
+    # Use factory function from dataset module
     stats_path = project_root / 'configs' / 'cdon_stats.json'
-    normalizer = CDONNormalization(stats_path=str(stats_path))
 
-    # Create datasets
-    train_dataset = CDONDataset(
-        data_dir=str(data_path),
-        split='train',
-        normalize=normalizer
+    # Enable causal sequences for DeepONet, disable for FNO/UNet
+    use_causal_sequence = (arch.lower() == 'deeponet')
+
+    per_timestep_train, per_timestep_val, sequence_train, sequence_val = (
+        create_cdon_dataloaders(
+            data_dir=str(data_path),
+            batch_size_per_timestep=batch_size_per_timestep,
+            batch_size_sequence=batch_size_sequence,
+            use_dummy=use_dummy,
+            stats_path=str(stats_path),
+            num_workers=num_workers,
+            pin_memory=torch.cuda.is_available(),
+            use_causal_sequence=use_causal_sequence
+        )
     )
 
-    val_dataset = CDONDataset(
-        data_dir=str(data_path),
-        split='test',
-        normalize=normalizer
-    )
-
-    # Create dataloaders
-    # pin_memory only works with CUDA, not MPS
-    use_pin_memory = torch.cuda.is_available()
-
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=use_pin_memory
-    )
-
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=use_pin_memory
-    )
-
-    return train_loader, val_loader
+    return per_timestep_train, per_timestep_val, sequence_train, sequence_val
 
 
 def train_baseline(
@@ -111,7 +104,16 @@ def train_baseline(
     experiment_name: str = None
 ) -> dict:
     """
-    Train a baseline neural operator model.
+    Train a baseline neural operator model with dual-batch training.
+
+    For DeepONet:
+    - Uses per-timestep loader for MSE loss (shuffled, ~320K samples)
+    - Uses sequence loader for BSP loss (not shuffled, ~100 samples)
+    - Combines: loss = lambda_mse * mse_loss + lambda_bsp * bsp_loss
+
+    For FNO/UNet:
+    - Uses only sequence loader (not shuffled, ~100 samples)
+    - Computes loss from full-sequence predictions
 
     Args:
         arch: Model architecture ('deeponet', 'fno', 'unet')
@@ -144,16 +146,20 @@ def train_baseline(
     console.print(f"Batch size: [bold]{config.batch_size}[/bold]")
     console.print(f"Scheduler: [bold]{config.scheduler_type}[/bold]")
 
-    # Create dataloaders
-    console.print("\n[bold cyan]Loading data...[/bold cyan]")
-    train_loader, val_loader = create_dataloaders(
+    # Create dual dataloaders
+    console.print("\n[bold cyan]Loading data (dual-batch)...[/bold cyan]")
+    per_ts_train, per_ts_val, seq_train, seq_val = create_dual_dataloaders(
         data_dir=data_dir,
-        batch_size=config.batch_size,
+        arch=arch,  # Pass architecture to determine causality
+        batch_size_per_timestep=config.batch_size,
+        batch_size_sequence=4,  # Keep sequence batch size small
         num_workers=config.num_workers,
         use_dummy=use_dummy
     )
-    console.print(f"✓ Train samples: {len(train_loader.dataset)}")
-    console.print(f"✓ Val samples: {len(val_loader.dataset)}")
+    console.print(f"✓ Per-timestep train samples: {len(per_ts_train.dataset):,}")
+    console.print(f"✓ Per-timestep val samples: {len(per_ts_val.dataset):,}")
+    console.print(f"✓ Sequence train samples: {len(seq_train.dataset)}")
+    console.print(f"✓ Sequence val samples: {len(seq_val.dataset)}")
 
     # Create model
     console.print(f"\n[bold cyan]Creating {arch} model...[/bold cyan]")
@@ -169,17 +175,38 @@ def train_baseline(
     }
     loss_config = loss_config_map[loss_type]
 
-    # Create trainer
+    # Create trainer with dual loaders
     console.print("\n[bold cyan]Initializing trainer...[/bold cyan]")
     console.print(f"Loss function: [bold]{loss_type}[/bold] - {loss_config.description}")
-    trainer = SimpleTrainer(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        config=config,
-        loss_config=loss_config,
-        experiment_name=experiment_name
-    )
+
+    # Detect if DeepONet for conditional per-timestep loader
+    is_deeponet = arch.lower() == 'deeponet'
+
+    if is_deeponet:
+        # DeepONet: use both per-timestep and sequence loaders
+        trainer = SimpleTrainer(
+            model=model,
+            per_timestep_train_loader=per_ts_train,
+            sequence_train_loader=seq_train,
+            per_timestep_val_loader=per_ts_val,
+            sequence_val_loader=seq_val,
+            config=config,
+            loss_config=loss_config,
+            experiment_name=experiment_name
+        )
+    else:
+        # FNO/UNet: use only sequence loaders
+        trainer = SimpleTrainer(
+            model=model,
+            per_timestep_train_loader=None,
+            sequence_train_loader=seq_train,
+            per_timestep_val_loader=None,
+            sequence_val_loader=seq_val,
+            config=config,
+            loss_config=loss_config,
+            experiment_name=experiment_name
+        )
+
     console.print(f"✓ Trainer initialized on device: {trainer.device}")
 
     # Train model
@@ -204,12 +231,15 @@ def train_baseline(
     final_val = results['val_history'][-1]
 
     table.add_row("Final Train Loss", f"{final_train['loss']:.6f}")
-    table.add_row("Final Train Field Error", f"{final_train['field_error']:.6f}")
     table.add_row("Final Val Loss", f"{final_val['loss']:.6f}")
-    table.add_row("Final Val Field Error", f"{final_val['field_error']:.6f}")
 
-    if 'spectrum_error' in final_val:
-        table.add_row("Final Val Spectrum Error", f"{final_val['spectrum_error']:.6f}")
+    # Add DeepONet-specific metrics if applicable
+    if is_deeponet and 'mse_loss' in final_train:
+        table.add_row("Final Train MSE Loss", f"{final_train['mse_loss']:.6f}")
+        table.add_row("Final Train BSP Loss", f"{final_train['bsp_loss']:.6f}")
+        if 'mse_loss' in final_val:
+            table.add_row("Final Val MSE Loss", f"{final_val['mse_loss']:.6f}")
+            table.add_row("Final Val BSP Loss", f"{final_val['bsp_loss']:.6f}")
 
     table.add_row("Checkpoint Dir", str(trainer.checkpoint_dir))
 

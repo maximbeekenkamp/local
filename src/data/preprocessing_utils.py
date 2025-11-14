@@ -160,52 +160,91 @@ def create_penalty_weights(
 
 def prepare_causal_sequence_data(
     inputs: Union[torch.Tensor, np.ndarray],
+    outputs: Union[torch.Tensor, np.ndarray],
     signal_length: int = 4000
-) -> Union[torch.Tensor, np.ndarray]:
+) -> Tuple[Union[torch.Tensor, np.ndarray], Union[torch.Tensor, np.ndarray]]:
     """
-    Zero-pad input sequences for causal prediction (simpler full-sequence approach).
+    Prepare full-sequence causal data with per-timestep zero-padding for BSP loss.
 
-    This is an alternative to the per-timestep windowing approach, suitable for
-    models that process full sequences (like UNet, FNO).
+    Creates the same zero-padded windows as prepare_causal_deeponet_data, but
+    organizes them by trajectory instead of shuffling. This is needed for BSP loss
+    which requires full sequences to compute FFT.
 
-    Instead of creating per-timestep samples, this simply left-pads the entire
-    input sequence with zeros.
+    The output maintains trajectory structure: [Ntraj, nt, signal_length] where each
+    timestep prediction has appropriate zero-padding to enforce causality.
+
+    Algorithm:
+    1. For each trajectory, create per-timestep zero-padded windows
+    2. Organize as [Ntraj, nt, signal_length] instead of [(Ntraj*nt), signal_length]
+    3. Keep corresponding outputs as [Ntraj, nt] instead of [Ntraj*nt]
+
+    This matches the reference CausalityDeepONet implementation where:
+    - MSE loss: random per-timestep samples (shuffled) [Ntraj*nt, signal_length]
+    - BSP loss: organized by trajectory (not shuffled) [Ntraj, nt, signal_length]
 
     Args:
         inputs: Input signals [N, T] or [N, C, T] where T=signal_length
+        outputs: Output signals [N, T] or [N, C, T] where T=signal_length
         signal_length: Length of signals (default 4000 for CDON)
 
     Returns:
-        padded_inputs: Zero-padded inputs [N, signal_length + (signal_length-1)]
-                      = [N, 7999] for signal_length=4000
+        causal_inputs: Windowed inputs [N, T, signal_length] - organized by trajectory
+        causal_outputs: Corresponding outputs [N, T] - organized by trajectory
 
     Example:
-        >>> inputs = torch.randn(100, 1, 4000)  # 100 samples
-        >>> padded = prepare_causal_sequence_data(inputs)
-        >>> print(padded.shape)  # [100, 1, 7999]
+        >>> inputs = torch.randn(100, 4000)   # 100 trajectories, 4000 timesteps
+        >>> outputs = torch.randn(100, 4000)  # 100 trajectories, 4000 timesteps
+        >>> causal_in, causal_out = prepare_causal_sequence_data(inputs, outputs)
+        >>> print(causal_in.shape)   # [100, 4000, 4000] - organized by trajectory
+        >>> print(causal_out.shape)  # [100, 4000] - organized by trajectory
     """
     is_torch = isinstance(inputs, torch.Tensor)
 
-    # Pad amount: signal_length - 1 zeros on the left
-    pad_amount = signal_length - 1
-
+    # Convert to numpy for processing
     if is_torch:
-        # Handle different input shapes
-        if inputs.ndim == 2:  # [N, T]
-            # Pad: (left, right) for last dimension
-            padded = torch.nn.functional.pad(inputs, (pad_amount, 0), value=0.0)
-        elif inputs.ndim == 3:  # [N, C, T]
-            # Pad: (left, right) for last dimension
-            padded = torch.nn.functional.pad(inputs, (pad_amount, 0), value=0.0)
-        else:
-            raise ValueError(f"Expected 2D or 3D input, got {inputs.ndim}D")
+        inputs_np = inputs.cpu().numpy()
+        outputs_np = outputs.cpu().numpy()
     else:
-        # Numpy version
-        if inputs.ndim == 2:  # [N, T]
-            padded = np.pad(inputs, ((0, 0), (pad_amount, 0)), mode='constant', constant_values=0.0)
-        elif inputs.ndim == 3:  # [N, C, T]
-            padded = np.pad(inputs, ((0, 0), (0, 0), (pad_amount, 0)), mode='constant', constant_values=0.0)
-        else:
-            raise ValueError(f"Expected 2D or 3D input, got {inputs.ndim}D")
+        inputs_np = inputs
+        outputs_np = outputs
 
-    return padded
+    # Handle channel dimension: [N, C, T] → [N, T] by taking first channel
+    if inputs_np.ndim == 3:
+        inputs_np = inputs_np[:, 0, :]  # Take first channel
+    if outputs_np.ndim == 3:
+        outputs_np = outputs_np[:, 0, :]  # Take first channel
+
+    n_samples = inputs_np.shape[0]
+
+    # Initialize output arrays [N, T, signal_length] and [N, T]
+    causal_inputs_np = np.zeros((n_samples, signal_length, signal_length), dtype=np.float32)
+    causal_outputs_np = np.zeros((n_samples, signal_length), dtype=np.float32)
+
+    # Process each trajectory
+    for idx in range(n_samples):
+        # Step 1: Left-pad input with (signal_length - 1) zeros
+        # Result: [0, 0, ..., 0, input[0], input[1], ..., input[T-1]]
+        padded_length = signal_length - 1 + signal_length  # 7999
+        loads_add_zero = np.zeros(padded_length, dtype=np.float32)
+        loads_add_zero[signal_length - 1:] = inputs_np[idx]  # Place actual signal after zeros
+
+        # Step 2: Create sliding windows for each output timestep
+        for t in range(signal_length):
+            # Window from position t to t + signal_length
+            # At t=0: [0, 0, ..., 0, input[0]]  (3999 zeros, then input[0])
+            # At t=1: [0, 0, ..., 0, input[0], input[1]]  (3998 zeros, then input[0:2])
+            # At t=3999: [input[0], input[1], ..., input[3999]]  (full signal, no zeros)
+            causal_inputs_np[idx, t, :] = loads_add_zero[t : t + signal_length]
+
+        # Corresponding outputs (full trajectory)
+        causal_outputs_np[idx, :] = outputs_np[idx]  # [signal_length]
+
+    # Convert back to torch if needed
+    if is_torch:
+        causal_inputs = torch.from_numpy(causal_inputs_np).to(inputs.device)
+        causal_outputs = torch.from_numpy(causal_outputs_np).to(outputs.device)
+    else:
+        causal_inputs = causal_inputs_np
+        causal_outputs = causal_outputs_np
+
+    return causal_inputs, causal_outputs

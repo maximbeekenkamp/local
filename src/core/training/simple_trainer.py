@@ -1,9 +1,13 @@
 """
 Simple trainer for neural operator models.
 
-Provides a clean training loop with:
+Supports dual-batch training:
+- DeepONet: Per-timestep (MSE) + Full-sequence (BSP) batches
+- FNO/UNet: Full-sequence batches (both MSE and BSP computed on sequences)
+
+Features:
 - CosineAnnealingLR scheduler
-- Field error + spectrum error metrics
+- Dual loss computation (MSE + BSP)
 - Checkpoint management (best + latest)
 - Rich progress bars for visual feedback
 """
@@ -14,8 +18,9 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from pathlib import Path
+from itertools import cycle
 
 from rich.progress import (
     Progress,
@@ -29,7 +34,6 @@ from rich.console import Console
 
 from .optimizers.optimizer_factory import create_optimizer
 from ..evaluation.metrics import (
-    RelativeL2Loss,
     compute_field_error,
     compute_spectrum_error_1d
 )
@@ -41,53 +45,78 @@ from configs.loss_config import LossConfig, BASELINE_CONFIG
 
 class SimpleTrainer:
     """
-    Simple trainer for neural operator models.
+    Dual-batch trainer for neural operator models.
+
+    Supports two training modes:
+    1. **DeepONet**: Dual-batch training with per-timestep (MSE) and sequence (BSP) batches
+       - Per-timestep loader: [N*T, 4000] samples with time coordinates (shuffled)
+       - Sequence loader: [N, 1, 4000] full sequences (NOT shuffled for BSP consistency)
+       - Alternates between loaders each iteration
+
+    2. **FNO/UNet**: Sequence-only training with full sequences for MSE and BSP
+       - Sequence loader: [N, 1, 4000] full sequences
+       - Single loader training
 
     Handles:
-    - Training loop with automatic differentiation
-    - Validation with multiple metrics
+    - Dual-batch training with loader cycling
+    - Separate MSE (per-timestep) and BSP (sequence) loss computation
+    - Validation with dual loaders
     - Checkpoint saving (best + latest)
     - Learning rate scheduling
     - Progress bars for visual feedback
 
     Example:
         >>> config = TrainingConfig(num_epochs=100, learning_rate=1e-3)
-        >>> trainer = SimpleTrainer(model, train_loader, val_loader, config)
+        >>> trainer = SimpleTrainer(
+        ...     model,
+        ...     per_timestep_train_loader, sequence_train_loader,
+        ...     per_timestep_val_loader, sequence_val_loader,
+        ...     config, loss_config
+        ... )
         >>> trainer.train()
     """
 
     def __init__(
         self,
         model: nn.Module,
-        train_loader: DataLoader,
-        val_loader: DataLoader,
+        per_timestep_train_loader: Optional[DataLoader],
+        sequence_train_loader: DataLoader,
+        per_timestep_val_loader: Optional[DataLoader],
+        sequence_val_loader: DataLoader,
         config: TrainingConfig,
         loss_config: LossConfig,
         experiment_name: str = 'experiment'
     ):
         """
-        Initialize trainer.
+        Initialize dual-batch trainer.
 
         Args:
             model: Neural operator model to train
-            train_loader: Training data loader
-            val_loader: Validation data loader
+            per_timestep_train_loader: Per-timestep training loader (DeepONet) or None (FNO/UNet)
+                Format: Dict with 'input', 'target', 'time_coord', 'penalty'
+            sequence_train_loader: Full-sequence training loader (all models)
+                Format: Tuple (input [B,1,T], target [B,1,T])
+            per_timestep_val_loader: Per-timestep validation loader or None
+            sequence_val_loader: Full-sequence validation loader
             config: Training configuration
             loss_config: Loss function configuration (required)
-                Use BASELINE_CONFIG for RelativeL2Loss
-                Use BSP_CONFIG for BSP loss
-                Use SA_BSP_CONFIG for SA-BSP loss
             experiment_name: Name for this experiment (used in checkpoint paths)
 
         Note:
-            For SA-BSP loss, this automatically creates a separate optimizer
-            for adaptive weights (see self.weight_optimizer)
+            - For SA-BSP loss, creates separate optimizer for adaptive weights
+            - Automatically detects model type (DeepONet vs FNO/UNet) from forward method
         """
         self.model = model
-        self.train_loader = train_loader
-        self.val_loader = val_loader
+        self.per_timestep_train_loader = per_timestep_train_loader
+        self.sequence_train_loader = sequence_train_loader
+        self.per_timestep_val_loader = per_timestep_val_loader
+        self.sequence_val_loader = sequence_val_loader
         self.config = config
         self.experiment_name = experiment_name
+
+        # Detect model type from forward method
+        self.is_deeponet = hasattr(model, 'forward_per_timestep') and hasattr(model, 'forward_sequence')
+        self.is_sequence_only = not self.is_deeponet
 
         # Device setup
         self.device = torch.device(
@@ -97,6 +126,17 @@ class SimpleTrainer:
 
         # Loss function (required parameter)
         self.criterion = create_loss(loss_config)
+
+        # Penalty weighting (optional, from reference CausalityDeepONet)
+        self.use_penalty_weighting = loss_config.loss_params.get('use_penalty', False)
+
+        # Loss configuration for dual-batch training
+        self.loss_config = loss_config
+
+        # Extract lambda weights from loss config (for dual loss combination)
+        # These are typically in loss_params: 'lambda_mse', 'lambda_bsp'
+        self.lambda_mse = loss_config.loss_params.get('lambda_mse', 1.0)
+        self.lambda_bsp = loss_config.loss_params.get('lambda_bsp', 1.0)
 
         # Optimizer - created via factory to support adam, adamw, soap
         self.optimizer = create_optimizer(
@@ -118,8 +158,31 @@ class SimpleTrainer:
         else:
             self.adapt_mode = None
 
-        # Scheduler setup
-        self.scheduler = self._create_scheduler()
+        # Scheduler setup - compute t_max based on actual number of steps
+        # For dual-batch training with DeepONet: use per-timestep loader (has more samples)
+        # For sequence-only: use sequence loader
+        if self.is_deeponet and self.per_timestep_train_loader is not None:
+            steps_per_epoch = len(self.per_timestep_train_loader)
+        else:
+            steps_per_epoch = len(self.sequence_train_loader)
+
+        self.scheduler = self._create_scheduler(steps_per_epoch)
+
+        # Weight scheduler for SA-BSP adaptive weights (if applicable)
+        # Uses same schedule as model optimizer for synchronized learning rate decay
+        self.weight_scheduler = None
+        if self.weight_optimizer is not None and self.config.scheduler_type == 'cosine':
+            # Calculate T_max same as model scheduler
+            if self.config.cosine_t_max is None:
+                t_max = self.config.num_epochs * steps_per_epoch
+            else:
+                t_max = self.config.cosine_t_max
+
+            self.weight_scheduler = CosineAnnealingLR(
+                self.weight_optimizer,
+                T_max=t_max,
+                eta_min=self.config.cosine_eta_min
+            )
 
         # Checkpoint directory
         self.checkpoint_dir = Path(config.checkpoint_dir) / experiment_name
@@ -213,12 +276,56 @@ class SimpleTrainer:
         # Update weights with (possibly negated) gradients
         self.weight_optimizer.step()
 
-    def _create_scheduler(self):
-        """Create learning rate scheduler based on config."""
+        # Step weight scheduler (cosine annealing for natural weight bound)
+        if self.weight_scheduler is not None:
+            self.weight_scheduler.step()
+
+    def _get_adaptive_weight_stats(self) -> Dict[str, float]:
+        """
+        Get adaptive weight statistics for monitoring.
+
+        Returns:
+            Dictionary with weight statistics:
+            - 'weight_mean': Mean weight value
+            - 'weight_std': Standard deviation of weights
+            - 'weight_min': Minimum weight value
+            - 'weight_max': Maximum weight value
+            - For global/combined modes:
+              - 'w_mse': MSE weight
+              - 'w_bsp': BSP weight
+        """
+        if not hasattr(self.criterion, 'spectral_loss') or \
+           not hasattr(self.criterion.spectral_loss, 'adaptive_weights'):
+            return {}
+
+        stats = self.criterion.spectral_loss.adaptive_weights.get_statistics()
+
+        metrics = {
+            'weight_mean': stats['mean'],
+            'weight_std': stats['std'],
+            'weight_min': stats['min'],
+            'weight_max': stats['max']
+        }
+
+        # For global/combined modes, also track MSE/BSP weights separately
+        if self.adapt_mode in ['global', 'combined']:
+            weights = stats['weights']
+            metrics['w_mse'] = float(weights[0])
+            metrics['w_bsp'] = float(weights[1])
+
+        return metrics
+
+    def _create_scheduler(self, steps_per_epoch: int):
+        """
+        Create learning rate scheduler based on config.
+
+        Args:
+            steps_per_epoch: Number of training steps per epoch
+        """
         if self.config.scheduler_type == 'cosine':
             # T_max = total number of training steps
             if self.config.cosine_t_max is None:
-                t_max = self.config.num_epochs * len(self.train_loader)
+                t_max = self.config.num_epochs * steps_per_epoch
             else:
                 t_max = self.config.cosine_t_max
 
@@ -248,112 +355,240 @@ class SimpleTrainer:
 
     def train_epoch(self) -> Dict[str, float]:
         """
-        Train for one epoch.
+        Train for one epoch with dual-batch training.
+
+        For DeepONet:
+        - Alternates between per-timestep (MSE) and sequence (BSP) batches
+        - Computes loss_mse from per-timestep predictions
+        - Computes loss_bsp from full-sequence predictions
+        - Combines: loss = lambda_mse * loss_mse + lambda_bsp * loss_bsp
+
+        For FNO/UNet:
+        - Uses only sequence loader
+        - Computes loss from full-sequence predictions
 
         Returns:
             Dictionary with training metrics:
-            - 'loss': Average training loss
-            - 'field_error': Average field error
+            - 'loss': Average training loss (combined MSE + BSP)
+            - 'mse_loss': Average MSE loss (DeepONet only)
+            - 'bsp_loss': Average BSP loss (DeepONet only)
         """
         self.model.train()
 
         total_loss = 0.0
-        total_field_error = 0.0
-        num_batches = len(self.train_loader)
+        total_mse_loss = 0.0
+        total_bsp_loss = 0.0
+        num_batches = 0
 
-        for batch_idx, (inputs, targets) in enumerate(self.train_loader):
-            # Move to device
-            inputs = inputs.to(self.device)
-            targets = targets.to(self.device)
+        # For DeepONet: cycle sequence loader (fewer samples) to match per-timestep loader length
+        if self.is_deeponet:
+            # Per-timestep loader has ~320K samples, sequence has ~100 samples
+            # Cycle sequence loader to match the iteration count of per-timestep
+            sequence_iter = cycle(self.sequence_train_loader)
+            per_timestep_iter = iter(self.per_timestep_train_loader)
 
-            # Forward pass
-            self.optimizer.zero_grad()
-            if self.weight_optimizer is not None:
-                self.weight_optimizer.zero_grad()
+            for batch_idx, per_timestep_batch in enumerate(per_timestep_iter):
+                # Get corresponding sequence batch (cycled)
+                sequence_batch = next(sequence_iter)
 
-            outputs = self.model(inputs)
+                # ===== Per-timestep forward (MSE loss) =====
+                per_ts_inputs = per_timestep_batch['input'].to(self.device)      # [B, 4000]
+                per_ts_targets = per_timestep_batch['target'].to(self.device)     # [B]
+                per_ts_time_coords = per_timestep_batch['time_coord'].to(self.device)  # [B]
+                per_ts_penalties = per_timestep_batch['penalty'].to(self.device)  # [B]
 
-            # Compute loss
-            loss = self.criterion(outputs, targets)
+                # Forward per-timestep
+                per_ts_outputs = self.model.forward_per_timestep(per_ts_inputs, per_ts_time_coords)
+                per_ts_outputs = per_ts_outputs.squeeze(-1)  # [B, 1] → [B]
 
-            # Backward pass
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-            self.optimizer.step()
-            # Update adaptive weights (SA-PINNs style with negated gradients)
-            self._update_adaptive_weights()
+                # Compute MSE loss
+                per_ts_loss = self.criterion(per_ts_outputs, per_ts_targets)
+                if self.use_penalty_weighting:
+                    mse_loss = (per_ts_loss * per_ts_penalties).mean()
+                else:
+                    mse_loss = per_ts_loss.mean() if per_ts_loss.ndim > 0 else per_ts_loss
 
-            # Step scheduler (for cosine annealing, step every batch)
-            if self.config.scheduler_type == 'cosine':
-                self.scheduler.step()
+                # ===== Sequence forward (BSP loss) =====
+                seq_inputs = sequence_batch[0].to(self.device)    # [B, 1, 4000]
+                seq_targets = sequence_batch[1].to(self.device)   # [B, 1, 4000]
 
-            # Compute metrics
-            with torch.no_grad():
-                field_error = compute_field_error(outputs, targets)
+                # Forward sequence
+                seq_outputs = self.model.forward_sequence(seq_inputs)  # [B, 1, 4000]
 
-            # Accumulate
-            total_loss += loss.item()
-            total_field_error += field_error.item()
+                # Compute BSP loss
+                bsp_loss = self.criterion(seq_outputs, seq_targets)
+                bsp_loss = bsp_loss.mean() if bsp_loss.ndim > 0 else bsp_loss
+
+                # ===== Combine losses =====
+                combined_loss = self.lambda_mse * mse_loss + self.lambda_bsp * bsp_loss
+
+                # ===== Backward pass =====
+                self.optimizer.zero_grad()
+                if self.weight_optimizer is not None:
+                    self.weight_optimizer.zero_grad()
+
+                combined_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                self.optimizer.step()
+                self._update_adaptive_weights()
+
+                # Step scheduler (for cosine annealing, step every batch)
+                if self.config.scheduler_type == 'cosine':
+                    self.scheduler.step()
+
+                # Accumulate
+                total_loss += combined_loss.item()
+                total_mse_loss += mse_loss.item()
+                total_bsp_loss += bsp_loss.item()
+                num_batches += 1
+
+        else:
+            # FNO/UNet: sequence-only training
+            for batch_idx, batch in enumerate(self.sequence_train_loader):
+                seq_inputs = batch[0].to(self.device)     # [B, 1, 4000]
+                seq_targets = batch[1].to(self.device)    # [B, 1, 4000]
+
+                # Forward pass
+                self.optimizer.zero_grad()
+                if self.weight_optimizer is not None:
+                    self.weight_optimizer.zero_grad()
+
+                seq_outputs = self.model(seq_inputs)  # [B, 1, 4000]
+
+                # Compute loss (MSE on sequences)
+                loss = self.criterion(seq_outputs, seq_targets)
+                final_loss = loss.mean() if loss.ndim > 0 else loss
+
+                # Backward pass
+                final_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                self.optimizer.step()
+                self._update_adaptive_weights()
+
+                # Step scheduler
+                if self.config.scheduler_type == 'cosine':
+                    self.scheduler.step()
+
+                # Accumulate
+                total_loss += final_loss.item()
+                num_batches += 1
 
         # Average metrics
-        avg_loss = total_loss / num_batches
-        avg_field_error = total_field_error / num_batches
+        avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
 
-        return {
-            'loss': avg_loss,
-            'field_error': avg_field_error
-        }
+        metrics = {'loss': avg_loss}
+
+        if self.is_deeponet:
+            metrics['mse_loss'] = total_mse_loss / num_batches if num_batches > 0 else 0.0
+            metrics['bsp_loss'] = total_bsp_loss / num_batches if num_batches > 0 else 0.0
+
+        # Add SA-BSP weight monitoring
+        if self.adapt_mode and self.adapt_mode != 'none':
+            weight_stats = self._get_adaptive_weight_stats()
+            metrics.update(weight_stats)
+
+        return metrics
 
     @torch.no_grad()
     def validate(self) -> Dict[str, float]:
         """
-        Validate on validation set.
+        Validate on validation set with dual-batch validation.
+
+        For DeepONet:
+        - Uses both per-timestep and sequence validation loaders
+        - Computes loss_mse from per-timestep predictions
+        - Computes loss_bsp from full-sequence predictions
+        - Combines: loss = lambda_mse * loss_mse + lambda_bsp * loss_bsp
+
+        For FNO/UNet:
+        - Uses only sequence validation loader
+        - Computes loss from full-sequence predictions
 
         Returns:
             Dictionary with validation metrics:
-            - 'loss': Average validation loss
-            - 'field_error': Average field error
-            - 'spectrum_error': Average spectrum error (if in config)
+            - 'loss': Average validation loss (combined MSE + BSP)
+            - 'mse_loss': Average MSE loss (DeepONet only)
+            - 'bsp_loss': Average BSP loss (DeepONet only)
         """
         self.model.eval()
 
         total_loss = 0.0
-        total_field_error = 0.0
-        total_spectrum_error = 0.0
-        num_batches = len(self.val_loader)
+        total_mse_loss = 0.0
+        total_bsp_loss = 0.0
+        num_batches = 0
 
-        compute_spectrum = 'spectrum_error' in self.config.eval_metrics
+        if self.is_deeponet:
+            # Cycle sequence loader to match per-timestep loader length
+            sequence_iter = cycle(self.sequence_val_loader)
+            per_timestep_iter = iter(self.per_timestep_val_loader)
 
-        for inputs, targets in self.val_loader:
-            # Move to device
-            inputs = inputs.to(self.device)
-            targets = targets.to(self.device)
+            for batch_idx, per_timestep_batch in enumerate(per_timestep_iter):
+                # Get corresponding sequence batch (cycled)
+                sequence_batch = next(sequence_iter)
 
-            # Forward pass
-            outputs = self.model(inputs)
+                # ===== Per-timestep validation (MSE loss) =====
+                per_ts_inputs = per_timestep_batch['input'].to(self.device)      # [B, 4000]
+                per_ts_targets = per_timestep_batch['target'].to(self.device)     # [B]
+                per_ts_time_coords = per_timestep_batch['time_coord'].to(self.device)  # [B]
 
-            # Compute loss
-            loss = self.criterion(outputs, targets)
+                # Forward per-timestep (no penalty weighting during validation)
+                per_ts_outputs = self.model.forward_per_timestep(per_ts_inputs, per_ts_time_coords)
+                per_ts_outputs = per_ts_outputs.squeeze(-1)  # [B, 1] → [B]
 
-            # Compute metrics
-            field_error = compute_field_error(outputs, targets)
+                # Compute MSE loss
+                per_ts_loss = self.criterion(per_ts_outputs, per_ts_targets)
+                mse_loss = per_ts_loss.mean() if per_ts_loss.ndim > 0 else per_ts_loss
 
-            if compute_spectrum:
-                spectrum_error = compute_spectrum_error_1d(outputs, targets)
-                total_spectrum_error += spectrum_error.item()
+                # ===== Sequence validation (BSP loss) =====
+                seq_inputs = sequence_batch[0].to(self.device)    # [B, 1, 4000]
+                seq_targets = sequence_batch[1].to(self.device)   # [B, 1, 4000]
 
-            # Accumulate
-            total_loss += loss.item()
-            total_field_error += field_error.item()
+                # Forward sequence
+                seq_outputs = self.model.forward_sequence(seq_inputs)  # [B, 1, 4000]
+
+                # Compute BSP loss
+                bsp_loss = self.criterion(seq_outputs, seq_targets)
+                bsp_loss = bsp_loss.mean() if bsp_loss.ndim > 0 else bsp_loss
+
+                # ===== Combine losses =====
+                combined_loss = self.lambda_mse * mse_loss + self.lambda_bsp * bsp_loss
+
+                # Accumulate
+                total_loss += combined_loss.item()
+                total_mse_loss += mse_loss.item()
+                total_bsp_loss += bsp_loss.item()
+                num_batches += 1
+
+        else:
+            # FNO/UNet: sequence-only validation
+            for batch in self.sequence_val_loader:
+                seq_inputs = batch[0].to(self.device)     # [B, 1, 4000]
+                seq_targets = batch[1].to(self.device)    # [B, 1, 4000]
+
+                # Forward pass
+                seq_outputs = self.model(seq_inputs)  # [B, 1, 4000]
+
+                # Compute loss
+                loss = self.criterion(seq_outputs, seq_targets)
+                final_loss = loss.mean() if loss.ndim > 0 else loss
+
+                # Accumulate
+                total_loss += final_loss.item()
+                num_batches += 1
 
         # Average metrics
-        metrics = {
-            'loss': total_loss / num_batches,
-            'field_error': total_field_error / num_batches
-        }
+        avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
 
-        if compute_spectrum:
-            metrics['spectrum_error'] = total_spectrum_error / num_batches
+        metrics = {'loss': avg_loss}
+
+        if self.is_deeponet:
+            metrics['mse_loss'] = total_mse_loss / num_batches if num_batches > 0 else 0.0
+            metrics['bsp_loss'] = total_bsp_loss / num_batches if num_batches > 0 else 0.0
+
+        # Add SA-BSP weight monitoring
+        if self.adapt_mode and self.adapt_mode != 'none':
+            weight_stats = self._get_adaptive_weight_stats()
+            metrics.update(weight_stats)
 
         return metrics
 
@@ -379,6 +614,12 @@ class SimpleTrainer:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': (
                 self.scheduler.state_dict() if self.scheduler else None
+            ),
+            'weight_optimizer_state_dict': (
+                self.weight_optimizer.state_dict() if self.weight_optimizer else None
+            ),
+            'weight_scheduler_state_dict': (
+                self.weight_scheduler.state_dict() if self.weight_scheduler else None
             ),
             'config': self.config.to_dict(),
             'metrics': metrics,
@@ -431,6 +672,14 @@ class SimpleTrainer:
         if self.scheduler and checkpoint['scheduler_state_dict']:
             self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
 
+        # Restore weight optimizer state (for SA-BSP)
+        if self.weight_optimizer and checkpoint.get('weight_optimizer_state_dict'):
+            self.weight_optimizer.load_state_dict(checkpoint['weight_optimizer_state_dict'])
+
+        # Restore weight scheduler state (for SA-BSP)
+        if self.weight_scheduler and checkpoint.get('weight_scheduler_state_dict'):
+            self.weight_scheduler.load_state_dict(checkpoint['weight_scheduler_state_dict'])
+
         # Restore training state
         self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
 
@@ -456,31 +705,59 @@ class SimpleTrainer:
         if self.config.verbose:
             self.console.print(f"\n[bold]Training {self.experiment_name}[/bold]")
             self.console.print(f"Device: {self.device}")
+            self.console.print(f"Model: {'DeepONet' if self.is_deeponet else 'FNO/UNet'}")
             self.console.print(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
-            self.console.print(f"Training samples: {len(self.train_loader.dataset)}")
-            self.console.print(f"Validation samples: {len(self.val_loader.dataset)}\n")
+
+            if self.is_deeponet:
+                self.console.print(f"Training samples (per-timestep): {len(self.per_timestep_train_loader.dataset):,}")
+                self.console.print(f"Training samples (sequences): {len(self.sequence_train_loader.dataset):,}")
+                self.console.print(f"Validation samples (per-timestep): {len(self.per_timestep_val_loader.dataset):,}")
+                self.console.print(f"Validation samples (sequences): {len(self.sequence_val_loader.dataset):,}")
+            else:
+                self.console.print(f"Training samples (sequences): {len(self.sequence_train_loader.dataset):,}")
+                self.console.print(f"Validation samples (sequences): {len(self.sequence_val_loader.dataset):,}")
+
+            self.console.print(f"Loss weights: λ_mse={self.lambda_mse}, λ_bsp={self.lambda_bsp}\n")
+
+        # Determine progress bar format based on model type
+        if self.is_deeponet:
+            progress_columns = [
+                TextColumn("[bold cyan]Epoch {task.fields[epoch]}/{task.total}"),
+                BarColumn(),
+                TextColumn("•"),
+                TextColumn("Loss: {task.fields[train_loss]:.4f}"),
+                TextColumn("[dim](MSE: {task.fields[train_mse]:.4f} BSP: {task.fields[train_bsp]:.4f})[/dim]"),
+                TextColumn("•"),
+                TextColumn("Val: {task.fields[val_loss]:.4f}"),
+                TextColumn("•"),
+                TextColumn("LR: {task.fields[lr]:.2e}"),
+                TimeElapsedColumn()
+            ]
+            initial_task_fields = {
+                'epoch': 0, 'train_loss': 0.0, 'train_mse': 0.0, 'train_bsp': 0.0,
+                'val_loss': 0.0, 'lr': self.config.learning_rate
+            }
+        else:
+            progress_columns = [
+                TextColumn("[bold cyan]Epoch {task.fields[epoch]}/{task.total}"),
+                BarColumn(),
+                TextColumn("•"),
+                TextColumn("Train Loss: {task.fields[train_loss]:.4f}"),
+                TextColumn("•"),
+                TextColumn("Val Loss: {task.fields[val_loss]:.4f}"),
+                TextColumn("•"),
+                TextColumn("LR: {task.fields[lr]:.2e}"),
+                TimeElapsedColumn()
+            ]
+            initial_task_fields = {
+                'epoch': 0, 'train_loss': 0.0,
+                'val_loss': 0.0, 'lr': self.config.learning_rate
+            }
 
         # Main epoch loop with progress bar
-        with Progress(
-            TextColumn("[bold cyan]Epoch {task.fields[epoch]}/{task.total}"),
-            BarColumn(),
-            TextColumn("•"),
-            TextColumn("Train Loss: {task.fields[train_loss]:.4f}"),
-            TextColumn("•"),
-            TextColumn("Val Loss: {task.fields[val_loss]:.4f}"),
-            TextColumn("•"),
-            TextColumn("LR: {task.fields[lr]:.2e}"),
-            TimeElapsedColumn()
-        ) as progress:
+        with Progress(*progress_columns) as progress:
 
-            epoch_task = progress.add_task(
-                "Training",
-                total=self.config.num_epochs,
-                epoch=0,
-                train_loss=0.0,
-                val_loss=0.0,
-                lr=self.config.learning_rate
-            )
+            epoch_task = progress.add_task("Training", total=self.config.num_epochs, **initial_task_fields)
 
             for epoch in range(1, self.config.num_epochs + 1):
                 self.current_epoch = epoch
@@ -516,14 +793,18 @@ class SimpleTrainer:
 
                 # Update progress bar
                 current_lr = self.optimizer.param_groups[0]['lr']
-                progress.update(
-                    epoch_task,
-                    advance=1,
-                    epoch=epoch,
-                    train_loss=train_metrics['loss'],
-                    val_loss=val_metrics['loss'],
-                    lr=current_lr
-                )
+                update_fields = {
+                    'epoch': epoch,
+                    'train_loss': train_metrics['loss'],
+                    'val_loss': val_metrics['loss'],
+                    'lr': current_lr
+                }
+
+                if self.is_deeponet:
+                    update_fields['train_mse'] = train_metrics.get('mse_loss', 0.0)
+                    update_fields['train_bsp'] = train_metrics.get('bsp_loss', 0.0)
+
+                progress.update(epoch_task, advance=1, **update_fields)
 
         # Print final results
         if self.config.verbose:

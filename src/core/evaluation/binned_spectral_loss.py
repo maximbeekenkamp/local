@@ -15,22 +15,22 @@ Reference:
   Binned Spectral Power Loss"
 - Original implementation: Generatively-Stabilised-NOs binned_spectral_loss.py (2D)
 
-Formula:
-    L_BSP = Σ_b w_b × mean_c [((E_pred[b,c] - E_true[b,c]) / (E_true[b,c] + ε))²]
+Formulas (corrected - lambda_i applied after error computation):
+    BSP:     L = mean(lambda_i * (1 - E_pred_i/E_target_i)²)
+    Log-BSP: L = mean(lambda_i * (log(E_pred_i) - log(E_target_i))²)
 
 Where:
-- b: frequency bin index (1 to n_bins)
-- c: channel index
-- E[b,c]: Bin-averaged energy in bin b, channel c
-- w_b: Optional bin weight (default: uniform)
-- ε: Numerical stability constant
+- i: frequency bin index
+- E_i: Bin-averaged energy in bin i
+- lambda_i: Per-bin weight (k² for turbulence, uniform, or trainable for SA-BSP)
+- Lambda_i weights different wavenumber contributions (high-k emphasized for turbulence)
 
 Usage:
     Always combine with base loss (never use BSP alone):
-    L_total = L_MSE + λ × L_BSP
+    L_total = L_MSE + μ × L_BSP  (where μ=1.0 typically)
 
 Example:
-    >>> loss_fn = BinnedSpectralLoss(n_bins=32, mu=1.0)
+    >>> loss_fn = BinnedSpectralLoss(n_bins=32, mu=1.0, lambda_k_mode='k_squared')
     >>> prediction = model(input)  # [16, 1, 4000]
     >>> loss = loss_fn(prediction, ground_truth)
 """
@@ -45,16 +45,22 @@ class BinnedSpectralLoss(nn.Module):
     """
     Binned Spectral Power Loss for 1D temporal signals.
 
-    Computes Mean Squared Percentage Error on bin-averaged Fourier energies.
-    Uses absolute energy ratios (not normalized distributions) per paper Algorithm 1.
+    Computes weighted squared error on bin-averaged Fourier energies.
+    Uses absolute energy ratios (BSP) or log differences (Log-BSP) with lambda_i weighting.
     Encourages models to learn correct spectral content, mitigating
     spectral bias toward low frequencies.
 
+    Formulas:
+        BSP:     loss = mean(lambda_i * (1 - E_pred/E_target)²)
+        Log-BSP: loss = mean(lambda_i * (log(E_pred) - log(E_target))²)
+
     Attributes:
         n_bins: Number of frequency bins (default: 32)
-        mu: Weight for BSP loss component (μ from paper, default: 1.0)
+        mu: Overall weight for BSP loss component (μ, default: 1.0)
         epsilon: Numerical stability constant (default: 1e-8)
         binning_mode: 'linear' or 'log' frequency spacing (default: 'linear')
+        lambda_k_mode: Per-bin weight initialization ('k_squared' or 'uniform')
+        use_log: Whether to use Log-BSP (True) or BSP (False)
     """
 
     def __init__(
@@ -66,7 +72,10 @@ class BinnedSpectralLoss(nn.Module):
         signal_length: int = 4000,
         cache_path: str = None,
         lambda_k_mode: str = 'k_squared',
-        use_log: bool = False
+        use_log: bool = False,
+        use_output_norm: bool = True,
+        use_minmax_norm: bool = True,
+        loss_type: str = 'mspe'
     ):
         """
         Initialize Binned Spectral Loss.
@@ -85,10 +94,18 @@ class BinnedSpectralLoss(nn.Module):
                 - 'k_squared': λ_k = k² (paper Table 4, turbulence - default)
                 - 'uniform': λ_k = 1 (paper Table 4, airfoil / log BSP)
             use_log: Apply log10 to energies before binning (log BSP variant, default: False)
+            use_output_norm: Apply per-batch output normalization before computing spectrum (default: True)
+                           Normalizes outputs: y_norm = (y - mean(y)) / (std(y) + eps)
+            use_minmax_norm: Apply per-sample min-max normalization to binned energies (default: True)
+                           Normalizes using target's min/max range: (E - min) / (max - min + eps)
+            loss_type: Loss aggregation method (default: 'mspe')
+                     - 'mspe': Mean Squared Percentage Error (BSP paper formula)
+                     - 'l2_norm': L2 norm of normalized differences (reference implementation)
 
         Raises:
             ValueError: If binning_mode is not 'linear' or 'log'
             ValueError: If lambda_k_mode is not 'k_squared' or 'uniform'
+            ValueError: If loss_type is not 'mspe' or 'l2_norm'
         """
         super().__init__()
         self.n_bins = n_bins
@@ -96,6 +113,8 @@ class BinnedSpectralLoss(nn.Module):
         self.epsilon = epsilon
         self.signal_length = signal_length
         self.use_log = use_log
+        self.use_output_norm = use_output_norm
+        self.use_minmax_norm = use_minmax_norm
 
         if binning_mode not in ['linear', 'log']:
             raise ValueError(f"binning_mode must be 'linear' or 'log', got {binning_mode}")
@@ -104,6 +123,10 @@ class BinnedSpectralLoss(nn.Module):
         if lambda_k_mode not in ['k_squared', 'uniform']:
             raise ValueError(f"lambda_k_mode must be 'k_squared' or 'uniform', got {lambda_k_mode}")
         self.lambda_k_mode = lambda_k_mode
+
+        if loss_type not in ['mspe', 'l2_norm']:
+            raise ValueError(f"loss_type must be 'mspe' or 'l2_norm', got {loss_type}")
+        self.loss_type = loss_type
 
         # LOAD bin edges from cache if provided, otherwise compute
         if cache_path is not None:
@@ -226,7 +249,7 @@ class BinnedSpectralLoss(nn.Module):
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """
-        Compute Binned Spectral Power loss.
+        Compute Binned Spectral Power loss with optional normalization.
 
         Args:
             pred: Predicted output [B, C, T] where T=4000
@@ -240,12 +263,26 @@ class BinnedSpectralLoss(nn.Module):
             Output: scalar
 
         Algorithm:
-            1. Compute 1D FFT along time dimension
-            2. Compute power spectrum: |FFT|²
-            3. Bin-average energies into n_bins frequency bands
-            4. Compute mean squared percentage error per bin
-            5. Average across bins and channels
+            1. [Optional] Per-batch output normalization: y_norm = (y - mean(y)) / (std(y) + eps)
+            2. Compute 1D FFT along time dimension
+            3. Compute power spectrum: |FFT|²
+            4. [Optional] Apply log10 transform
+            5. Bin-average energies into n_bins frequency bands
+            6. [Optional] Per-sample min-max normalization: (E - min) / (max - min + eps)
+            7. Compute loss (MSPE or L2 norm)
+            8. Average across bins and channels
         """
+        # Step 0: Per-batch output normalization (reference implementation)
+        if self.use_output_norm:
+            # Normalize each sample independently: y = (y - mean) / (std + eps)
+            pred_mean = pred.mean(dim=-1, keepdim=True)
+            pred_std = pred.std(dim=-1, keepdim=True)
+            pred = (pred - pred_mean) / (pred_std + self.epsilon)
+
+            target_mean = target.mean(dim=-1, keepdim=True)
+            target_std = target.std(dim=-1, keepdim=True)
+            target = (target - target_mean) / (target_std + self.epsilon)
+
         # Step 1: Compute 1D real FFT
         # Shape: [B, C, T] → [B, C, T//2+1] complex
         pred_fft = torch.fft.rfft(pred, dim=-1)
@@ -270,19 +307,55 @@ class BinnedSpectralLoss(nn.Module):
         pred_binned = self._bin_energy_1d(pred_energy, T)
         target_binned = self._bin_energy_1d(target_energy, T)
 
-        # Step 4: Mean Squared Percentage Error per bin (Paper Algorithm 1)
-        # Compare absolute binned energies (NOT normalized distributions)
-        # Paper formula: 1 - (E_u^bin + ε) / (E_v^bin + ε)
-        relative_error = 1.0 - (pred_binned + self.epsilon) / (target_binned + self.epsilon)
+        # Step 4: Per-sample min-max normalization (reference implementation)
+        if self.use_minmax_norm:
+            # Compute min/max from target spectrum for each sample independently
+            # Shape: [B, C, n_bins] → [B, C, 1] for min/max
+            temp_min = target_binned.min(dim=-1, keepdim=True).values
+            temp_max = target_binned.max(dim=-1, keepdim=True).values
 
-        # Squared error
-        squared_error = relative_error ** 2
+            # Normalize both using target's range
+            # Formula: (E - min) / (max - min + eps)
+            range_val = temp_max - temp_min + self.epsilon
+            target_binned = (target_binned - temp_min) / range_val
+            pred_binned = (pred_binned - temp_min) / range_val
 
-        # Step 5: Paper formula (Algorithm 1, line 99):
-        # L_spec = (1/N_k) * Σ_c Σ_i (...)²
-        # = (1/N_k) mean over bins, SUM over channels, mean over batch
-        # Shape: [B, C, n_bins] → [B, C] → [B] → scalar
-        bsp_loss = squared_error.sum(dim=1).mean(dim=-1).mean()  # sum channels (Σ_c), mean bins (1/N_k), mean batch
+        # Step 5: Compute loss (either MSPE or L2 norm)
+        if self.loss_type == 'mspe':
+            # BSP Formula: loss = mean(lambda_i * (1 - E_pred/E_target)²)
+            # Compute ratio (now unweighted binned energies after Step A1 fix)
+            ratio = (pred_binned + self.epsilon) / (target_binned + self.epsilon)  # [B, C, n_bins]
+
+            # Compute relative error: (1 - ratio)
+            relative_error = 1.0 - ratio  # [B, C, n_bins]
+
+            # Square the error
+            squared_error = relative_error ** 2  # [B, C, n_bins]
+
+            # Apply lambda_i weighting AFTER squaring (Option 2: standard weighted loss)
+            # This prevents lambda_i from canceling in the ratio
+            bin_weights = self.bin_weights.unsqueeze(0).unsqueeze(0)  # [1, 1, n_bins]
+            weighted_squared_error = squared_error * bin_weights  # [B, C, n_bins]
+
+            # Aggregate: sum over bins (weighted), mean over batch and channels
+            # Shape: [B, C, n_bins] → sum over bins → [B, C] → mean → scalar
+            bsp_loss = weighted_squared_error.sum(dim=-1).mean()
+
+        elif self.loss_type == 'l2_norm':
+            # Log-BSP Formula: loss = mean(lambda_i * (log(E_pred) - log(E_target))²)
+            # Compute difference (now unweighted binned log energies after Step A1 fix)
+            diff = target_binned - pred_binned  # [B, C, n_bins]
+
+            # Square the difference
+            squared_diff = diff ** 2  # [B, C, n_bins]
+
+            # Apply lambda_i weighting AFTER squaring (Option 2: standard weighted loss)
+            # This prevents lambda_i from being incorrectly squared in L2 norm
+            bin_weights = self.bin_weights.unsqueeze(0).unsqueeze(0)  # [1, 1, n_bins]
+            weighted_squared_diff = squared_diff * bin_weights  # [B, C, n_bins]
+
+            # Aggregate: mean over all dimensions (batch, channels, bins)
+            bsp_loss = weighted_squared_diff.mean()
 
         # Apply weight μ (paper's overall BSP weight)
         return self.mu * bsp_loss
@@ -362,14 +435,12 @@ class BinnedSpectralLoss(nn.Module):
         bin_counts = bin_counts.unsqueeze(0).unsqueeze(0)  # [1, 1, n_bins]
         binned_energy = binned_energy / (bin_counts + 1e-10)
 
-        # Apply bin-specific weights λ_i (BSP paper Algorithm 1, lines 96-97)
-        # E^bin(c,i) ← ... · λ_i
-        # Shape: [B, C, n_bins] * [1, 1, n_bins] → [B, C, n_bins]
-        # Ensure bin_weights are on the same device as binned_energy
-        bin_weights = self.bin_weights.to(binned_energy.device)
-        binned_energy = binned_energy * bin_weights.unsqueeze(0).unsqueeze(0)
+        # NOTE: Lambda_i (bin_weights) is NOT applied here.
+        # It will be applied AFTER error computation in forward() and compute_bin_errors()
+        # to avoid cancellation in BSP ratio and incorrect squaring in Log-BSP.
+        # Correct formula: error² * λ_i, not (energy * λ_i)
 
-        return binned_energy
+        return binned_energy  # [B, C, n_bins] - unweighted binned energies
 
     def compute_bin_errors(
         self,
@@ -391,6 +462,16 @@ class BinnedSpectralLoss(nn.Module):
         - Analyzing which frequency bands have highest error
         - Self-adaptive weighting in SA-BSP loss
         """
+        # Step 0: Per-batch output normalization (matching forward() method)
+        if self.use_output_norm:
+            pred_mean = pred.mean(dim=-1, keepdim=True)
+            pred_std = pred.std(dim=-1, keepdim=True)
+            pred = (pred - pred_mean) / (pred_std + self.epsilon)
+
+            target_mean = target.mean(dim=-1, keepdim=True)
+            target_std = target.std(dim=-1, keepdim=True)
+            target = (target - target_mean) / (target_std + self.epsilon)
+
         # Compute FFT and power spectrum
         pred_fft = torch.fft.rfft(pred, dim=-1)
         target_fft = torch.fft.rfft(target, dim=-1)
@@ -398,19 +479,41 @@ class BinnedSpectralLoss(nn.Module):
         pred_energy = 0.5 * torch.abs(pred_fft) ** 2
         target_energy = 0.5 * torch.abs(target_fft) ** 2
 
+        # Apply log transform if enabled (matching forward() method)
+        if self.use_log:
+            pred_energy = torch.log10(pred_energy + self.epsilon)
+            target_energy = torch.log10(target_energy + self.epsilon)
+
         # Bin energies
         T = pred.shape[-1]
         pred_binned = self._bin_energy_1d(pred_energy, T)
         target_binned = self._bin_energy_1d(target_energy, T)
 
-        # Relative error per bin (Paper Algorithm 1)
-        # Use absolute binned energies (same as forward() method)
-        # Paper formula: 1 - (E_u^bin + ε) / (E_v^bin + ε)
-        relative_error = 1.0 - (pred_binned + self.epsilon) / (target_binned + self.epsilon)
-        squared_error = relative_error ** 2
+        # Per-sample min-max normalization (matching forward() method)
+        if self.use_minmax_norm:
+            temp_min = target_binned.min(dim=-1, keepdim=True).values
+            temp_max = target_binned.max(dim=-1, keepdim=True).values
+            range_val = temp_max - temp_min + self.epsilon
+            target_binned = (target_binned - temp_min) / range_val
+            pred_binned = (pred_binned - temp_min) / range_val
+
+        # Compute per-bin errors (matching forward() method logic)
+        if self.use_log:
+            # Log-BSP: Compute squared difference
+            diff = target_binned - pred_binned  # [B, C, n_bins]
+            squared_error = diff ** 2
+        else:
+            # BSP: Compute squared relative error
+            ratio = (pred_binned + self.epsilon) / (target_binned + self.epsilon)
+            relative_error = 1.0 - ratio
+            squared_error = relative_error ** 2
+
+        # Apply lambda_i weighting AFTER squaring (same as forward())
+        bin_weights = self.bin_weights.unsqueeze(0).unsqueeze(0)  # [1, 1, n_bins]
+        weighted_squared_error = squared_error * bin_weights  # [B, C, n_bins]
 
         # Average over batch and channels: [B, C, n_bins] → [n_bins]
-        bin_errors = squared_error.mean(dim=(0, 1))
+        bin_errors = weighted_squared_error.mean(dim=(0, 1))
 
         return bin_errors
 

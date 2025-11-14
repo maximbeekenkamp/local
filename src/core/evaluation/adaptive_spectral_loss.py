@@ -140,22 +140,51 @@ class SelfAdaptiveWeights(nn.Module):
             # Trainable parameters (raw weights, no log-space)
             self.weights = nn.Parameter(init_values)
 
+            # EMA buffer for smoothing (prevents rapid oscillations from gradient ascent)
+            # Beta=0.999 from 2024 BRDR paper
+            self.register_buffer('weights_ema', init_values.clone())
+            self.ema_beta = 0.999
+
     def forward(self) -> torch.Tensor:
         """
-        Get current adaptive weights.
+        Get current adaptive weights with EMA smoothing and mean-one normalization.
 
         Returns:
-            Weights [n_components], unconstrained
+            Normalized and smoothed weights [n_components]
 
         Shape:
             Output: [n_components]
 
         Note:
-            No clipping or exp - returns raw weights directly.
-            Following SA-PINNs, weights are unconstrained and can grow
-            unbounded as training progresses.
+            Two-stage stability approach (2024 BRDR paper):
+            1. EMA smoothing (β=0.999): Prevents rapid oscillations from gradient ascent
+            2. Mean-one normalization: Prevents unbounded weight growth
+
+            This differs from original SA-PINNs (which uses unbounded weights)
+            but improves stability and convergence by ~1 order of magnitude.
+
+            Formula:
+                w_ema = β * w_ema_old + (1-β) * w_raw  (during training only)
+                w_normalized = w_ema / mean(w_ema)
+
+            Fixed weights (mode='none') are returned without processing.
         """
-        return self.weights
+        # Fixed weights: no processing needed
+        if self.mode == 'none':
+            return self.weights
+
+        # Update EMA during training only (not during validation)
+        if self.training:
+            with torch.no_grad():
+                self.weights_ema = (
+                    self.ema_beta * self.weights_ema +
+                    (1 - self.ema_beta) * self.weights
+                )
+
+        # Mean-one normalization on smoothed weights
+        # Add small epsilon for numerical stability
+        w_normalized = self.weights_ema / (self.weights_ema.mean() + 1e-8)
+        return w_normalized
 
     def get_statistics(self) -> dict:
         """
@@ -206,7 +235,10 @@ class SelfAdaptiveBSPLoss(nn.Module):
         signal_length: int = 4000,
         cache_path: str = None,
         lambda_k_mode: str = 'k_squared',
-        use_log: bool = False
+        use_log: bool = False,
+        use_output_norm: bool = True,
+        use_minmax_norm: bool = True,
+        loss_type: str = 'mspe'
     ):
         """
         Initialize Self-Adaptive BSP Loss.
@@ -230,6 +262,9 @@ class SelfAdaptiveBSPLoss(nn.Module):
                 - 'k_squared': λ_k = k² (paper Table 4, turbulence - default)
                 - 'uniform': λ_k = 1 (paper Table 4, airfoil)
             use_log: Apply log10 to energies (log BSP variant, default: False)
+            use_output_norm: Apply per-batch output normalization (default: True)
+            use_minmax_norm: Apply per-sample min-max normalization (default: True)
+            loss_type: Loss aggregation method ('mspe' or 'l2_norm', default: 'mspe')
 
         Note:
             When using SA-BSP in training, you MUST create a separate optimizer
@@ -251,7 +286,10 @@ class SelfAdaptiveBSPLoss(nn.Module):
             signal_length=signal_length,
             cache_path=cache_path,
             lambda_k_mode=lambda_k_mode,
-            use_log=use_log
+            use_log=use_log,
+            use_output_norm=use_output_norm,
+            use_minmax_norm=use_minmax_norm,
+            loss_type=loss_type
         )
 
         # Create adaptive weights with proper initialization

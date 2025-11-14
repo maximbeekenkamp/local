@@ -133,27 +133,26 @@ class MLP(nn.Module):
 
 class DeepONet1D(nn.Module):
     """
-    DeepONet for 1D temporal operator learning.
+    DeepONet for 1D temporal operator learning with per-timestep prediction.
 
-    Architecture:
-        - Branch network: MLP that encodes input function u(t) into latent representation
-        - Trunk network: MLP that learns basis functions at query points
-        - Combination: Element-wise product + sum to predict output
+    Implements the reference CausalityDeepONet architecture:
+        - Branch network: Encodes windowed input function (4000 timesteps) → latent vector
+        - Trunk network: Encodes time coordinate (scalar) → latent vector
+        - Combination: Element-wise product + sum → scalar output
 
     Causality:
-        Physical causality is enforced through DATA PREPROCESSING (zero-padding),
-        NOT through architectural constraints. This matches the reference
-        CausalityDeepONet paper implementation.
+        Enforced through DATA PREPROCESSING (per-timestep windowing with zero-padding).
+        At timestep t, branch receives only inputs from times [0, ..., t].
 
-        The input data should be zero-padded such that for each output timestep t,
-        the branch network only receives information from times [0, ..., t].
-
-    Input shape: [batch, 1, timesteps]
-    Output shape: [batch, 1, timesteps]
+    Forward signature: forward(input, time_coord) → output
+        - input: [batch, sensor_dim] - windowed input with zero-padding
+        - time_coord: [batch, 1] - normalized time in [0, 1]
+        - output: [batch, 1] - scalar prediction
 
     References:
         - Lu et al. "Learning nonlinear operators via DeepONet" (2021)
         - Penwarden et al. "A metalearning approach for physics-informed neural networks" (2023)
+        - Reference implementation: Custom_dataset.py (reshapeTraining)
     """
 
     def __init__(
@@ -196,8 +195,8 @@ class DeepONet1D(nn.Module):
             activation=activation
         )
 
-        # Trunk network: processes query coordinates
-        # Input: [batch, timesteps, 1] → Output: [batch, timesteps, latent_dim]
+        # Trunk network: processes query coordinates (time)
+        # Input: [batch, 1] → Output: [batch, latent_dim]
         self.trunk = MLP(
             in_features=1,  # Single coordinate (time)
             out_features=latent_dim,
@@ -205,47 +204,100 @@ class DeepONet1D(nn.Module):
             activation=activation
         )
 
-        # Query points: uniform grid [0, 1]
-        # Generated once and reused for all forward passes
-        self.register_buffer(
-            'query_points',
-            torch.linspace(0, 1, sensor_dim).unsqueeze(-1)  # [sensor_dim, 1]
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward_per_timestep(self, x: torch.Tensor, time_coord: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass through DeepONet.
+        Per-timestep forward pass for MSE loss (DeepONet reference mode).
 
         Args:
-            x: Input tensor of shape [batch, 1, timesteps]
+            x: Windowed input tensor of shape [batch, sensor_dim]
+               Each sample is a zero-padded causal window
+            time_coord: Time coordinates of shape [batch, 1] or [batch]
+                       Normalized time values in [0, 1]
 
         Returns:
-            Output tensor of shape [batch, 1, timesteps]
+            Output tensor of shape [batch, 1] - scalar prediction per sample
+
+        Example:
+            >>> model = DeepONet1D(sensor_dim=4000, latent_dim=100)
+            >>> x = torch.randn(16, 4000)  # 16 windowed samples
+            >>> t = torch.rand(16, 1)      # 16 time coordinates
+            >>> y = model.forward_per_timestep(x, t)  # Output: [16, 1]
+        """
+        # Ensure time_coord has shape [batch, 1]
+        if time_coord.ndim == 1:
+            time_coord = time_coord.unsqueeze(-1)  # [batch] → [batch, 1]
+
+        # Branch network: encode windowed input function
+        # [batch, sensor_dim] → [batch, latent_dim]
+        branch_output = self.branch(x)
+
+        # Trunk network: encode time coordinate
+        # [batch, 1] → [batch, latent_dim]
+        trunk_output = self.trunk(time_coord)
+
+        # Combine branch and trunk via element-wise product and sum
+        # [batch, latent_dim] * [batch, latent_dim] → [batch, latent_dim]
+        combined = branch_output * trunk_output
+
+        # Sum over latent dimension: [batch, latent_dim] → [batch]
+        output = combined.sum(dim=-1)
+
+        # Add output dimension: [batch] → [batch, 1]
+        output = output.unsqueeze(-1)
+
+        return output
+
+    def forward_sequence(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Full-sequence forward pass for BSP loss (no causality constraint).
+
+        Args:
+            x: Full sequence input tensor of shape [batch, 1, sensor_dim]
+               Raw signals without zero-padding
+
+        Returns:
+            Output tensor of shape [batch, 1, sensor_dim] - full sequence predictions
+
+        Note:
+            This method predicts ALL timesteps in one pass using all time coordinates.
+            Used for BSP spectral loss computation.
+
+        Example:
+            >>> model = DeepONet1D(sensor_dim=4000, latent_dim=100)
+            >>> x = torch.randn(4, 1, 4000)  # 4 full sequence samples
+            >>> y = model.forward_sequence(x)  # Output: [4, 1, 4000]
         """
         batch_size = x.shape[0]
 
-        # Flatten input: [batch, 1, timesteps] → [batch, timesteps]
+        # Flatten input: [batch, 1, sensor_dim] → [batch, sensor_dim]
         x_flat = x.squeeze(1)  # [batch, sensor_dim]
 
         # Branch network: encode input function
         # [batch, sensor_dim] → [batch, latent_dim]
         branch_output = self.branch(x_flat)
 
-        # Trunk network: process query points
-        # Expand query points for batch: [sensor_dim, 1] → [batch, sensor_dim, 1]
-        query_batch = self.query_points.unsqueeze(0).expand(batch_size, -1, -1)
+        # Create time grid [0, 1] for all timesteps
+        time_grid = torch.linspace(0, 1, self.sensor_dim, device=x.device)  # [sensor_dim]
 
-        # [batch, sensor_dim, 1] → [batch, sensor_dim, latent_dim]
-        trunk_output = self.trunk(query_batch)
+        # Expand for batch: [sensor_dim] → [batch, sensor_dim, 1]
+        time_batch = time_grid.unsqueeze(0).unsqueeze(-1).expand(batch_size, -1, -1)  # [batch, sensor_dim, 1]
 
-        # Combine branch and trunk via element-wise product
-        # Branch: [batch, latent_dim] → [batch, 1, latent_dim]
-        # Trunk: [batch, sensor_dim, latent_dim]
+        # Reshape for trunk: [batch, sensor_dim, 1] → [batch * sensor_dim, 1]
+        time_flat = time_batch.reshape(-1, 1)
+
+        # Trunk network: process all time coordinates
+        # [batch * sensor_dim, 1] → [batch * sensor_dim, latent_dim]
+        trunk_output_flat = self.trunk(time_flat)
+
+        # Reshape back: [batch * sensor_dim, latent_dim] → [batch, sensor_dim, latent_dim]
+        trunk_output = trunk_output_flat.reshape(batch_size, self.sensor_dim, self.latent_dim)
+
+        # Expand branch output for broadcasting: [batch, latent_dim] → [batch, 1, latent_dim]
         branch_expanded = branch_output.unsqueeze(1)  # [batch, 1, latent_dim]
 
-        # Element-wise multiply and sum over latent dimension
+        # Element-wise product with broadcasting
         # [batch, 1, latent_dim] * [batch, sensor_dim, latent_dim] → [batch, sensor_dim, latent_dim]
-        combined = branch_expanded * trunk_output  # Broadcasting
+        combined = branch_expanded * trunk_output
 
         # Sum over latent dimension: [batch, sensor_dim, latent_dim] → [batch, sensor_dim]
         output = combined.sum(dim=-1)

@@ -1,7 +1,9 @@
 """
 Model factory for creating neural operator models.
 
-Provides centralized model instantiation for model architectures.
+Provides centralized model instantiation for dual-batch training:
+- DeepONet: Per-timestep MSE loss + full-sequence BSP loss
+- FNO/UNet: Full-sequence data for both MSE and BSP losses
 """
 
 import torch.nn as nn
@@ -91,13 +93,13 @@ def _create_fno(config: Dict[str, Any]) -> FNO1D:
     Args:
         config: Configuration dictionary. Supported keys:
                 - n_modes: Number of Fourier modes (default 28)
-                - hidden_channels: Hidden channel dimension (default 52)
+                - hidden_channels: Hidden channel dimension (default 60)
                 - n_layers: Number of FNO layers (default 4)
                 - in_channels: Input channels (default 1)
                 - out_channels: Output channels (default 1)
 
     Returns:
-        Initialized FNO1D model
+        Initialized FNO1D model for sequence-to-sequence prediction
     """
     # Default hyperparameters (target ~250K params)
     defaults = {
@@ -128,7 +130,7 @@ def _create_unet(config: Dict[str, Any]) -> UNet1D:
                 - num_groups: GroupNorm groups (default 4)
 
     Returns:
-        Initialized UNet1D model
+        Initialized UNet1D model for sequence-to-sequence prediction
     """
     # Default hyperparameters (target ~250K params)
     defaults = {
