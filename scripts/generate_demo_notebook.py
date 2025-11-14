@@ -201,7 +201,8 @@ train_dataset = CDONDataset(
     data_dir=str(DATA_DIR),
     split='train',
     normalize=normalizer,
-    use_causal_padding=USE_CAUSAL_PADDING,
+    mode='sequence',  # Use sequence mode for BSP loss training
+    use_causal_sequence=USE_CAUSAL_PADDING,  # Apply causal padding if enabled
     signal_length=4000
 )
 
@@ -209,7 +210,8 @@ val_dataset = CDONDataset(
     data_dir=str(DATA_DIR),
     split='test',
     normalize=normalizer,
-    use_causal_padding=USE_CAUSAL_PADDING,
+    mode='sequence',  # Use sequence mode for BSP loss training
+    use_causal_sequence=USE_CAUSAL_PADDING,  # Apply causal padding if enabled
     signal_length=4000
 )
 
