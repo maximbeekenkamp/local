@@ -2,16 +2,16 @@
 Loss function configuration for neural operator training.
 
 Supports multiple loss types for ablation studies:
-- Relative L2 Loss (baseline)
+- Field Error Loss (baseline)
 - Binned Spectral Power (BSP) Loss
 - Self-Adaptive BSP (SA-BSP) Loss
 - Combined losses with weighting
 
 Example configurations:
 
-    # Baseline (Relative L2 only)
+    # Baseline (Field Error only)
     loss_config = LossConfig(
-        loss_type='relative_l2',
+        loss_type='field_error',
         loss_params={}
     )
 
@@ -50,7 +50,7 @@ class LossConfig:
 
     Attributes:
         loss_type: Type of loss function to use
-            - 'relative_l2': Relative L2 loss (baseline)
+            - 'field_error': Field Error loss (baseline)
             - 'bsp': Binned Spectral Power loss
             - 'sa_bsp': Self-Adaptive BSP loss
             - 'combined': Combination of base + spectral loss
@@ -59,7 +59,7 @@ class LossConfig:
 
     Loss-specific parameters:
 
-        For 'relative_l2':
+        For 'field_error':
             No additional parameters needed
 
         For 'bsp':
@@ -85,7 +85,7 @@ class LossConfig:
             - cache_path (str): Path to precomputed spectrum cache for loading bin edges (optional)
 
         For 'combined':
-            - base_loss (str): Base loss type ('relative_l2')
+            - base_loss (str): Base loss type ('field_error')
             - spectral_loss (str): Spectral loss type ('bsp' or 'sa_bsp')
             - lambda_spectral (float): Weight for spectral component (default: 1.0)
             - n_bins (int): Number of frequency bins (default: 32)
@@ -114,7 +114,7 @@ class LossConfig:
 
     def __post_init__(self):
         """Validate loss configuration."""
-        valid_types = ['relative_l2', 'bsp', 'sa_bsp', 'combined']
+        valid_types = ['field_error', 'bsp', 'sa_bsp', 'combined']
         if self.loss_type not in valid_types:
             raise ValueError(
                 f"Invalid loss_type: {self.loss_type}. "
@@ -175,9 +175,9 @@ class LossConfig:
 
 # Predefined configurations for common use cases
 BASELINE_CONFIG = LossConfig(
-    loss_type='relative_l2',
+    loss_type='field_error',
     loss_params={},
-    description='Baseline: Relative L2 loss only'
+    description='Baseline: Field Error loss only'
 )
 
 BSP_CONFIG = LossConfig(

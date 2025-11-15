@@ -172,7 +172,7 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
     Examples:
         >>> from configs.loss_config import BASELINE_CONFIG, BSP_CONFIG
         >>> loss = create_loss(BASELINE_CONFIG)
-        >>> loss = create_loss({'loss_type': 'relative_l2', 'loss_params': {}})
+        >>> loss = create_loss({'loss_type': 'field_error', 'loss_params': {}})
     """
     # Convert dict to LossConfig if needed
     if isinstance(config, dict):
