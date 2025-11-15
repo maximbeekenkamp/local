@@ -67,25 +67,43 @@ class SimpleTrainer:
 
     Example:
         >>> config = TrainingConfig(num_epochs=100, learning_rate=1e-3)
+
+        >>> # Simplified API (sequence-only models like FNO/UNet)
         >>> trainer = SimpleTrainer(
-        ...     model,
-        ...     per_timestep_train_loader, sequence_train_loader,
-        ...     per_timestep_val_loader, sequence_val_loader,
-        ...     config, loss_config
+        ...     model=model,
+        ...     train_loader=train_loader,
+        ...     val_loader=val_loader,
+        ...     config=config,
+        ...     loss_config=loss_config
         ... )
+
+        >>> # Dual-loader API (DeepONet with per-timestep + sequence batches)
+        >>> trainer = SimpleTrainer(
+        ...     model=model,
+        ...     per_timestep_train_loader=per_ts_train,
+        ...     sequence_train_loader=seq_train,
+        ...     per_timestep_val_loader=per_ts_val,
+        ...     sequence_val_loader=seq_val,
+        ...     config=config,
+        ...     loss_config=loss_config
+        ... )
+
         >>> trainer.train()
     """
 
     def __init__(
         self,
         model: nn.Module,
-        per_timestep_train_loader: Optional[DataLoader],
-        sequence_train_loader: DataLoader,
-        per_timestep_val_loader: Optional[DataLoader],
-        sequence_val_loader: DataLoader,
-        config: TrainingConfig,
-        loss_config: LossConfig,
-        experiment_name: str = 'experiment'
+        per_timestep_train_loader: Optional[DataLoader] = None,
+        sequence_train_loader: Optional[DataLoader] = None,
+        per_timestep_val_loader: Optional[DataLoader] = None,
+        sequence_val_loader: Optional[DataLoader] = None,
+        config: TrainingConfig = None,
+        loss_config: LossConfig = None,
+        experiment_name: str = 'experiment',
+        # Simplified API (alternative to dual-loader API)
+        train_loader: Optional[DataLoader] = None,
+        val_loader: Optional[DataLoader] = None
     ):
         """
         Initialize dual-batch trainer.
@@ -101,11 +119,30 @@ class SimpleTrainer:
             config: Training configuration
             loss_config: Loss function configuration (required)
             experiment_name: Name for this experiment (used in checkpoint paths)
+            train_loader: Simplified API - training loader (used as sequence_train_loader if provided)
+            val_loader: Simplified API - validation loader (used as sequence_val_loader if provided)
 
         Note:
             - For SA-BSP loss, creates separate optimizer for adaptive weights
             - Automatically detects model type (DeepONet vs FNO/UNet) from forward method
+            - Can use either dual-loader API (per_timestep_*, sequence_*) or simplified API (train_loader, val_loader)
         """
+        # Handle simplified API: if train_loader/val_loader provided, use them as sequence loaders
+        if train_loader is not None and sequence_train_loader is None:
+            sequence_train_loader = train_loader
+        if val_loader is not None and sequence_val_loader is None:
+            sequence_val_loader = val_loader
+
+        # Validate that we have at least sequence loaders
+        if sequence_train_loader is None:
+            raise ValueError(
+                "Must provide either 'sequence_train_loader' or 'train_loader'"
+            )
+        if sequence_val_loader is None:
+            raise ValueError(
+                "Must provide either 'sequence_val_loader' or 'val_loader'"
+            )
+
         self.model = model
         self.per_timestep_train_loader = per_timestep_train_loader
         self.sequence_train_loader = sequence_train_loader
