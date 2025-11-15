@@ -418,7 +418,8 @@ class SimpleTrainer:
         num_batches = 0
 
         # For DeepONet: cycle sequence loader (fewer samples) to match per-timestep loader length
-        if self.is_deeponet:
+        if self.is_deeponet and self.per_timestep_train_loader is not None:
+            # DeepONet with dual-batch training
             # Per-timestep loader has ~320K samples, sequence has ~100 samples
             # Cycle sequence loader to match the iteration count of per-timestep
             sequence_iter = cycle(self.sequence_train_loader)
@@ -490,7 +491,11 @@ class SimpleTrainer:
                 if self.weight_optimizer is not None:
                     self.weight_optimizer.zero_grad()
 
-                seq_outputs = self.model(seq_inputs)  # [B, 1, 4000]
+                # Use appropriate forward method based on model type
+                if self.is_deeponet:
+                    seq_outputs = self.model.forward_sequence(seq_inputs)  # [B, 1, 4000]
+                else:
+                    seq_outputs = self.model(seq_inputs)  # [B, 1, 4000]
 
                 # Compute loss (MSE on sequences)
                 loss = self.criterion(seq_outputs, seq_targets)
@@ -554,7 +559,8 @@ class SimpleTrainer:
         total_bsp_loss = 0.0
         num_batches = 0
 
-        if self.is_deeponet:
+        if self.is_deeponet and self.per_timestep_val_loader is not None:
+            # DeepONet with dual-batch validation
             # Cycle sequence loader to match per-timestep loader length
             sequence_iter = cycle(self.sequence_val_loader)
             per_timestep_iter = iter(self.per_timestep_val_loader)
@@ -597,13 +603,16 @@ class SimpleTrainer:
                 num_batches += 1
 
         else:
-            # FNO/UNet: sequence-only validation
+            # FNO/UNet or DeepONet with sequence-only validation
             for batch in self.sequence_val_loader:
                 seq_inputs = batch[0].to(self.device)     # [B, 1, 4000]
                 seq_targets = batch[1].to(self.device)    # [B, 1, 4000]
 
-                # Forward pass
-                seq_outputs = self.model(seq_inputs)  # [B, 1, 4000]
+                # Forward pass (use appropriate method based on model type)
+                if self.is_deeponet:
+                    seq_outputs = self.model.forward_sequence(seq_inputs)  # [B, 1, 4000]
+                else:
+                    seq_outputs = self.model(seq_inputs)  # [B, 1, 4000]
 
                 # Compute loss
                 loss = self.criterion(seq_outputs, seq_targets)
@@ -745,12 +754,14 @@ class SimpleTrainer:
             self.console.print(f"Model: {'DeepONet' if self.is_deeponet else 'FNO/UNet'}")
             self.console.print(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
 
-            if self.is_deeponet:
+            if self.is_deeponet and self.per_timestep_train_loader is not None:
+                # DeepONet with dual-batch training
                 self.console.print(f"Training samples (per-timestep): {len(self.per_timestep_train_loader.dataset):,}")
                 self.console.print(f"Training samples (sequences): {len(self.sequence_train_loader.dataset):,}")
                 self.console.print(f"Validation samples (per-timestep): {len(self.per_timestep_val_loader.dataset):,}")
                 self.console.print(f"Validation samples (sequences): {len(self.sequence_val_loader.dataset):,}")
             else:
+                # FNO/UNet or DeepONet with sequence-only training
                 self.console.print(f"Training samples (sequences): {len(self.sequence_train_loader.dataset):,}")
                 self.console.print(f"Validation samples (sequences): {len(self.sequence_val_loader.dataset):,}")
 
