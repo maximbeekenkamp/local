@@ -272,6 +272,18 @@ class BinnedSpectralLoss(nn.Module):
             7. Compute loss (MSPE or L2 norm)
             8. Average across bins and channels
         """
+        # Validate input shape
+        if pred.dim() != 3:
+            raise ValueError(
+                f"Expected pred to have shape [B, C, T], "
+                f"but got shape {pred.shape} with {pred.dim()} dimensions"
+            )
+        if target.dim() != 3:
+            raise ValueError(
+                f"Expected target to have shape [B, C, T], "
+                f"but got shape {target.shape} with {target.dim()} dimensions"
+            )
+
         # Step 0: Per-batch output normalization (reference implementation)
         if self.use_output_norm:
             # Normalize each sample independently: y = (y - mean) / (std + eps)
@@ -384,6 +396,13 @@ class BinnedSpectralLoss(nn.Module):
             3. HARD-assign each frequency to exactly ONE bin
             4. Average energy within each bin (mean over frequencies in bin)
         """
+        # Debug: Check energy shape
+        if energy.dim() != 3:
+            raise ValueError(
+                f"Expected energy to have 3 dimensions [B, C, n_freqs], "
+                f"but got shape {energy.shape} with {energy.dim()} dimensions"
+            )
+
         B, C, n_freqs = energy.shape
         device = energy.device
         dtype = energy.dtype
