@@ -166,6 +166,7 @@ class SimpleTrainer:
 
         # Loss function (required parameter)
         self.criterion = create_loss(loss_config)
+        self.criterion.to(self.device)
 
         # Penalty weighting (optional, from reference CausalityDeepONet)
         self.use_penalty_weighting = loss_config.loss_params.get('use_penalty', False)
