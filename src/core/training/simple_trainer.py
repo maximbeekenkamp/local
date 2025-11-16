@@ -37,7 +37,7 @@ from ..evaluation.metrics import (
     compute_field_error,
     compute_spectrum_error_1d
 )
-from ..evaluation.loss_factory import create_loss
+from ..evaluation.loss_factory import create_loss, CombinedLoss
 from ..evaluation.adaptive_spectral_loss import SelfAdaptiveBSPLoss
 from configs.training_config import TrainingConfig
 from configs.loss_config import LossConfig, BASELINE_CONFIG
@@ -500,22 +500,19 @@ class SimpleTrainer:
                 else:
                     seq_outputs = self.model(seq_inputs)  # [B, 1, 4000]
 
-                # Fix: Ensure outputs and targets are 3D [B, C, T] for loss computation
-                # Some models may return 4D tensors, squeeze extra dims
-                while seq_outputs.dim() > 3:
-                    for dim_idx in range(seq_outputs.dim()):
-                        if seq_outputs.shape[dim_idx] == 1:
-                            seq_outputs = seq_outputs.squeeze(dim_idx)
-                            break
-                while seq_targets.dim() > 3:
-                    for dim_idx in range(seq_targets.dim()):
-                        if seq_targets.shape[dim_idx] == 1:
-                            seq_targets = seq_targets.squeeze(dim_idx)
-                            break
-
-                # Compute loss (MSE on sequences)
+                # Compute loss
                 loss = self.criterion(seq_outputs, seq_targets)
                 final_loss = loss.mean() if loss.ndim > 0 else loss
+
+                # Extract loss components if using CombinedLoss
+                if isinstance(self.criterion, CombinedLoss):
+                    components = self.criterion.get_loss_components(seq_outputs, seq_targets)
+                    mse_component = components['base'].mean() if components['base'].ndim > 0 else components['base']
+                    bsp_component = components['spectral'].mean() if components['spectral'].ndim > 0 else components['spectral']
+                else:
+                    # For non-combined loss, just use the loss itself for MSE
+                    mse_component = final_loss
+                    bsp_component = torch.tensor(0.0)
 
                 # Backward pass
                 final_loss.backward()
@@ -529,6 +526,8 @@ class SimpleTrainer:
 
                 # Accumulate
                 total_loss += final_loss.item()
+                total_mse_loss += mse_component.item()
+                total_bsp_loss += bsp_component.item()
                 num_batches += 1
 
         # Average metrics
@@ -630,24 +629,24 @@ class SimpleTrainer:
                 else:
                     seq_outputs = self.model(seq_inputs)  # [B, 1, 4000]
 
-                # Fix: Ensure outputs and targets are 3D [B, C, T] for loss computation
-                while seq_outputs.dim() > 3:
-                    for dim_idx in range(seq_outputs.dim()):
-                        if seq_outputs.shape[dim_idx] == 1:
-                            seq_outputs = seq_outputs.squeeze(dim_idx)
-                            break
-                while seq_targets.dim() > 3:
-                    for dim_idx in range(seq_targets.dim()):
-                        if seq_targets.shape[dim_idx] == 1:
-                            seq_targets = seq_targets.squeeze(dim_idx)
-                            break
-
                 # Compute loss
                 loss = self.criterion(seq_outputs, seq_targets)
                 final_loss = loss.mean() if loss.ndim > 0 else loss
 
+                # Extract loss components if using CombinedLoss
+                if isinstance(self.criterion, CombinedLoss):
+                    components = self.criterion.get_loss_components(seq_outputs, seq_targets)
+                    mse_component = components['base'].mean() if components['base'].ndim > 0 else components['base']
+                    bsp_component = components['spectral'].mean() if components['spectral'].ndim > 0 else components['spectral']
+                else:
+                    # For non-combined loss, just use the loss itself for MSE
+                    mse_component = final_loss
+                    bsp_component = torch.tensor(0.0)
+
                 # Accumulate
                 total_loss += final_loss.item()
+                total_mse_loss += mse_component.item()
+                total_bsp_loss += bsp_component.item()
                 num_batches += 1
 
         # Average metrics

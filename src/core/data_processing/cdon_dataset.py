@@ -296,7 +296,17 @@ class CDONDataset(Dataset):
                 'penalty': self.penalty_weights_expanded[idx]  # [] scalar
             }
         else:  # mode == 'sequence'
-            return (self.sequence_inputs[idx], self.sequence_targets[idx])
+            if self.use_causal_sequence:
+                # For causal sequences in sequence mode:
+                # Use last timestep's window (contains full sequence) for branch input
+                # sequence_inputs: [N, T, signal_length] -> [idx, -1:, :] -> [1, signal_length]
+                # sequence_targets: [N, T] -> [idx] -> [T] -> unsqueeze -> [1, T]
+                input_seq = self.sequence_inputs[idx, -1:, :]  # Take last timestep: [1, signal_length]
+                target_seq = self.sequence_targets[idx].unsqueeze(0)  # Add channel dim: [1, T]
+                return (input_seq, target_seq)
+            else:
+                # For non-causal: already shaped [1, signal_length]
+                return (self.sequence_inputs[idx], self.sequence_targets[idx])
 
     def get_raw_earthquake(self, earthquake_idx: int) -> Tuple[np.ndarray, np.ndarray]:
         """
