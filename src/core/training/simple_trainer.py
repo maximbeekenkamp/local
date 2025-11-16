@@ -500,13 +500,18 @@ class SimpleTrainer:
                 else:
                     seq_outputs = self.model(seq_inputs)  # [B, 1, 4000]
 
-                # DEBUG: Print shapes on first batch of first epoch
-                if batch_idx == 0 and (not hasattr(self, '_debug_printed') or not self._debug_printed):
-                    print(f"\n🔍 DEBUG - Training shapes:")
-                    print(f"  seq_inputs: {seq_inputs.shape}")
-                    print(f"  seq_outputs: {seq_outputs.shape}")
-                    print(f"  seq_targets: {seq_targets.shape}")
-                    self._debug_printed = True
+                # Fix: Ensure outputs and targets are 3D [B, C, T] for loss computation
+                # Some models may return 4D tensors, squeeze extra dims
+                while seq_outputs.dim() > 3:
+                    for dim_idx in range(seq_outputs.dim()):
+                        if seq_outputs.shape[dim_idx] == 1:
+                            seq_outputs = seq_outputs.squeeze(dim_idx)
+                            break
+                while seq_targets.dim() > 3:
+                    for dim_idx in range(seq_targets.dim()):
+                        if seq_targets.shape[dim_idx] == 1:
+                            seq_targets = seq_targets.squeeze(dim_idx)
+                            break
 
                 # Compute loss (MSE on sequences)
                 loss = self.criterion(seq_outputs, seq_targets)
@@ -624,6 +629,18 @@ class SimpleTrainer:
                     seq_outputs = self.model.forward_sequence(seq_inputs)  # [B, 1, 4000]
                 else:
                     seq_outputs = self.model(seq_inputs)  # [B, 1, 4000]
+
+                # Fix: Ensure outputs and targets are 3D [B, C, T] for loss computation
+                while seq_outputs.dim() > 3:
+                    for dim_idx in range(seq_outputs.dim()):
+                        if seq_outputs.shape[dim_idx] == 1:
+                            seq_outputs = seq_outputs.squeeze(dim_idx)
+                            break
+                while seq_targets.dim() > 3:
+                    for dim_idx in range(seq_targets.dim()):
+                        if seq_targets.shape[dim_idx] == 1:
+                            seq_targets = seq_targets.squeeze(dim_idx)
+                            break
 
                 # Compute loss
                 loss = self.criterion(seq_outputs, seq_targets)
