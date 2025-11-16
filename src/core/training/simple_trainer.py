@@ -500,6 +500,14 @@ class SimpleTrainer:
                 else:
                     seq_outputs = self.model(seq_inputs)  # [B, 1, 4000]
 
+                # DEBUG: Print shapes on first batch of first epoch
+                if batch_idx == 0 and (not hasattr(self, '_debug_printed') or not self._debug_printed):
+                    print(f"\n🔍 DEBUG - Training shapes:")
+                    print(f"  seq_inputs: {seq_inputs.shape}")
+                    print(f"  seq_outputs: {seq_outputs.shape}")
+                    print(f"  seq_targets: {seq_targets.shape}")
+                    self._debug_printed = True
+
                 # Compute loss (MSE on sequences)
                 loss = self.criterion(seq_outputs, seq_targets)
                 final_loss = loss.mean() if loss.ndim > 0 else loss
