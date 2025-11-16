@@ -156,9 +156,12 @@ class SimpleTrainer:
         self.is_sequence_only = not self.is_deeponet
 
         # Device setup
-        self.device = torch.device(
-            config.device if torch.cuda.is_available() else 'cpu'
-        )
+        if config.device == 'cuda' and not torch.cuda.is_available():
+            print("⚠️  WARNING: CUDA requested but not available. Falling back to CPU.")
+            self.device = torch.device('cpu')
+        else:
+            self.device = torch.device(config.device)
+
         self.model.to(self.device)
 
         # Loss function (required parameter)
@@ -481,7 +484,7 @@ class SimpleTrainer:
                 num_batches += 1
 
         else:
-            # FNO/UNet: sequence-only training
+            # FNO/UNet or DeepONet sequence-only training
             for batch_idx, batch in enumerate(self.sequence_train_loader):
                 seq_inputs = batch[0].to(self.device)     # [B, 1, 4000]
                 seq_targets = batch[1].to(self.device)    # [B, 1, 4000]
