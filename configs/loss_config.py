@@ -191,6 +191,7 @@ BSP_CONFIG = LossConfig(
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
+        'target_cache_path': 'cache/target_spectra_linear.npz',  # Precomputed target spectra
         'lambda_k_mode': 'uniform',  # λ_k = 1.0 for all bins (uniform initialization)
         'use_log': False,  # Standard energy (not log10)
         'use_output_norm': True,  # Per-batch output normalization: y = (y - mean) / std
@@ -212,6 +213,7 @@ SA_BSP_PERBIN_CONFIG = LossConfig(
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
+        'target_cache_path': 'cache/target_spectra_log.npz',  # Precomputed target spectra (log)
         'lambda_k_mode': 'uniform',  # λ_k = 1.0 initialization (uniform, matches log-bsp core)
         'use_log': True,  # Log10 transform of energies (log-bsp core)
         'use_output_norm': True,  # Per-batch output normalization
@@ -274,6 +276,7 @@ LOG_BSP_CONFIG = LossConfig(
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',
+        'target_cache_path': 'cache/target_spectra_log.npz',  # Precomputed target spectra (log)
         'lambda_k_mode': 'uniform',  # λ_k = 1 for all bins (log variant)
         'use_log': True,  # Log10 transform of energies
         'use_output_norm': True,  # Per-batch output normalization: y = (y - mean) / std

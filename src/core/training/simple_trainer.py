@@ -422,8 +422,12 @@ class SimpleTrainer:
         num_batches = 0
 
         # For DeepONet: cycle sequence loader (fewer samples) to match per-timestep loader length
-        if self.is_deeponet and self.per_timestep_train_loader is not None:
-            # DeepONet with dual-batch training
+        # Only use dual-batch mode for combined losses (MSE + BSP)
+        # For single losses (e.g., baseline FieldErrorLoss), fall through to sequence-only mode
+        if (self.is_deeponet and
+            self.per_timestep_train_loader is not None and
+            isinstance(self.criterion, CombinedLoss)):
+            # DeepONet with dual-batch training (combined loss only)
             # Per-timestep loader has ~320K samples, sequence has ~100 samples
             # Cycle sequence loader to match the iteration count of per-timestep
             sequence_iter = cycle(self.sequence_train_loader)
@@ -451,14 +455,22 @@ class SimpleTrainer:
                     mse_loss = per_ts_loss.mean() if per_ts_loss.ndim > 0 else per_ts_loss
 
                 # ===== Sequence forward (BSP loss) =====
-                seq_inputs = sequence_batch[0].to(self.device)    # [B, 1, 4000]
-                seq_targets = sequence_batch[1].to(self.device)   # [B, 1, 4000]
+                # Extract inputs, targets, and sample indices
+                if len(sequence_batch) == 3:  # New format with indices
+                    seq_inputs, seq_targets, sample_indices = sequence_batch
+                    seq_inputs = seq_inputs.to(self.device)      # [B, 1, 4000]
+                    seq_targets = seq_targets.to(self.device)    # [B, 1, 4000]
+                    sample_indices = sample_indices.to(self.device)  # [B]
+                else:  # Fallback for old format
+                    seq_inputs = sequence_batch[0].to(self.device)
+                    seq_targets = sequence_batch[1].to(self.device)
+                    sample_indices = None
 
                 # Forward sequence
                 seq_outputs = self.model.forward_sequence(seq_inputs)  # [B, 1, 4000]
 
-                # Compute BSP loss
-                bsp_loss = self.criterion(seq_outputs, seq_targets)
+                # Compute BSP loss (pass sample indices for cache lookup)
+                bsp_loss = self.criterion(seq_outputs, seq_targets, sample_indices=sample_indices)
                 bsp_loss = bsp_loss.mean() if bsp_loss.ndim > 0 else bsp_loss
 
                 # ===== Combine losses =====
@@ -487,8 +499,16 @@ class SimpleTrainer:
         else:
             # FNO/UNet or DeepONet sequence-only training
             for batch_idx, batch in enumerate(self.sequence_train_loader):
-                seq_inputs = batch[0].to(self.device)     # [B, 1, 4000]
-                seq_targets = batch[1].to(self.device)    # [B, 1, 4000]
+                # Extract inputs, targets, and sample indices (for cache lookup)
+                if len(batch) == 3:  # New format with indices
+                    seq_inputs, seq_targets, sample_indices = batch
+                    seq_inputs = seq_inputs.to(self.device)     # [B, 1, 4000]
+                    seq_targets = seq_targets.to(self.device)    # [B, 1, 4000]
+                    sample_indices = sample_indices.to(self.device)  # [B]
+                else:  # Fallback for old format
+                    seq_inputs = batch[0].to(self.device)
+                    seq_targets = batch[1].to(self.device)
+                    sample_indices = None
 
                 # Forward pass
                 self.optimizer.zero_grad()
@@ -501,13 +521,13 @@ class SimpleTrainer:
                 else:
                     seq_outputs = self.model(seq_inputs)  # [B, 1, 4000]
 
-                # Compute loss
-                loss = self.criterion(seq_outputs, seq_targets)
+                # Compute loss (pass sample indices for cache lookup)
+                loss = self.criterion(seq_outputs, seq_targets, sample_indices=sample_indices)
                 final_loss = loss.mean() if loss.ndim > 0 else loss
 
                 # Extract loss components if using CombinedLoss
                 if isinstance(self.criterion, CombinedLoss):
-                    components = self.criterion.get_loss_components(seq_outputs, seq_targets)
+                    components = self.criterion.get_loss_components(seq_outputs, seq_targets, sample_indices=sample_indices)
                     mse_component = components['base'].mean() if components['base'].ndim > 0 else components['base']
                     bsp_component = components['spectral'].mean() if components['spectral'].ndim > 0 else components['spectral']
                 else:
@@ -579,8 +599,11 @@ class SimpleTrainer:
         all_predictions = []
         all_targets = []
 
-        if self.is_deeponet and self.per_timestep_val_loader is not None:
-            # DeepONet with dual-batch validation
+        # Only use dual-batch mode for combined losses (same as training)
+        if (self.is_deeponet and
+            self.per_timestep_val_loader is not None and
+            isinstance(self.criterion, CombinedLoss)):
+            # DeepONet with dual-batch validation (combined loss only)
             # Cycle sequence loader to match per-timestep loader length
             sequence_iter = cycle(self.sequence_val_loader)
             per_timestep_iter = iter(self.per_timestep_val_loader)
@@ -603,14 +626,22 @@ class SimpleTrainer:
                 mse_loss = per_ts_loss.mean() if per_ts_loss.ndim > 0 else per_ts_loss
 
                 # ===== Sequence validation (BSP loss) =====
-                seq_inputs = sequence_batch[0].to(self.device)    # [B, 1, 4000]
-                seq_targets = sequence_batch[1].to(self.device)   # [B, 1, 4000]
+                # Extract inputs, targets, and sample indices
+                if len(sequence_batch) == 3:  # New format with indices
+                    seq_inputs, seq_targets, sample_indices = sequence_batch
+                    seq_inputs = seq_inputs.to(self.device)      # [B, 1, 4000]
+                    seq_targets = seq_targets.to(self.device)    # [B, 1, 4000]
+                    sample_indices = sample_indices.to(self.device)  # [B]
+                else:  # Fallback for old format
+                    seq_inputs = sequence_batch[0].to(self.device)
+                    seq_targets = sequence_batch[1].to(self.device)
+                    sample_indices = None
 
                 # Forward sequence
                 seq_outputs = self.model.forward_sequence(seq_inputs)  # [B, 1, 4000]
 
-                # Compute BSP loss
-                bsp_loss = self.criterion(seq_outputs, seq_targets)
+                # Compute BSP loss (pass sample indices for cache lookup)
+                bsp_loss = self.criterion(seq_outputs, seq_targets, sample_indices=sample_indices)
                 bsp_loss = bsp_loss.mean() if bsp_loss.ndim > 0 else bsp_loss
 
                 # ===== Combine losses =====
@@ -629,8 +660,16 @@ class SimpleTrainer:
         else:
             # FNO/UNet or DeepONet with sequence-only validation
             for batch in self.sequence_val_loader:
-                seq_inputs = batch[0].to(self.device)     # [B, 1, 4000]
-                seq_targets = batch[1].to(self.device)    # [B, 1, 4000]
+                # Extract inputs, targets, and sample indices
+                if len(batch) == 3:  # New format with indices
+                    seq_inputs, seq_targets, sample_indices = batch
+                    seq_inputs = seq_inputs.to(self.device)     # [B, 1, 4000]
+                    seq_targets = seq_targets.to(self.device)    # [B, 1, 4000]
+                    sample_indices = sample_indices.to(self.device)  # [B]
+                else:  # Fallback for old format
+                    seq_inputs = batch[0].to(self.device)
+                    seq_targets = batch[1].to(self.device)
+                    sample_indices = None
 
                 # Forward pass (use appropriate method based on model type)
                 if self.is_deeponet:
@@ -638,13 +677,13 @@ class SimpleTrainer:
                 else:
                     seq_outputs = self.model(seq_inputs)  # [B, 1, 4000]
 
-                # Compute loss
-                loss = self.criterion(seq_outputs, seq_targets)
+                # Compute loss (pass sample indices for cache lookup)
+                loss = self.criterion(seq_outputs, seq_targets, sample_indices=sample_indices)
                 final_loss = loss.mean() if loss.ndim > 0 else loss
 
                 # Extract loss components if using CombinedLoss
                 if isinstance(self.criterion, CombinedLoss):
-                    components = self.criterion.get_loss_components(seq_outputs, seq_targets)
+                    components = self.criterion.get_loss_components(seq_outputs, seq_targets, sample_indices=sample_indices)
                     mse_component = components['base'].mean() if components['base'].ndim > 0 else components['base']
                     bsp_component = components['spectral'].mean() if components['spectral'].ndim > 0 else components['spectral']
                 else:

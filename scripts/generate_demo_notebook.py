@@ -219,12 +219,15 @@ val_dataset = CDONDataset(
     signal_length=4000
 )
 
-# Create dataloaders
-BATCH_SIZE = 16
+# Create dataloaders with optimized batch sizes
+# Per-timestep: Large batch (320K samples) for GPU efficiency
+# Sequence: Smaller batch (80 samples) to fit memory
+BATCH_SIZE_PER_TIMESTEP = 512  # For MSE on per-timestep data
+BATCH_SIZE_SEQUENCE = 16        # For BSP on sequences
 
 train_loader = DataLoader(
     train_dataset,
-    batch_size=BATCH_SIZE,
+    batch_size=BATCH_SIZE_SEQUENCE,  # Sequence data uses smaller batch
     shuffle=True,
     num_workers=2,
     pin_memory=True
@@ -232,7 +235,7 @@ train_loader = DataLoader(
 
 val_loader = DataLoader(
     val_dataset,
-    batch_size=BATCH_SIZE,
+    batch_size=BATCH_SIZE_SEQUENCE,  # Sequence data uses smaller batch
     shuffle=False,
     num_workers=2,
     pin_memory=True
@@ -769,6 +772,36 @@ We'll train with all 6 loss types sequentially and store results for comparison:
 - **SA-BSP-GLOBAL**: 2 adaptive weights (w_mse + w_bsp) with negated gradients for MSE/BSP balance
 - **SA-BSP-COMBINED**: 34 weights (w_mse + w_bsp + 32 per-bin) with full competitive dynamics"""),
 
+    # Cell 16.5: Module Reload (NEW)
+    markdown_cell("""## Cell 4.5: Force Module Reload
+
+Run this cell to reload trainer and loss modules. This ensures any code changes are picked up.
+
+**When to run:**
+- After modifying trainer or loss code
+- Before starting training runs
+- If you see unexpected behavior (e.g., baseline showing DUAL-BATCH mode)"""),
+
+    code_cell("""# Force reload of training and evaluation modules
+import sys
+
+modules_to_reload = [
+    'src.core.training.simple_trainer',
+    'src.core.evaluation.loss_factory',
+    'src.core.evaluation.binned_spectral_loss',
+    'src.core.evaluation.adaptive_spectral_loss',
+]
+
+for module_name in modules_to_reload:
+    if module_name in sys.modules:
+        del sys.modules[module_name]
+
+from src.core.training.simple_trainer import SimpleTrainer
+from src.core.evaluation.loss_factory import create_loss
+
+print("✓ Modules reloaded - trainer will use latest code")
+print("  Run training cells below to see updated behavior")"""),
+
     # Cell 17: Code
     code_cell("""# Import loss configurations
 from configs.loss_config import (
@@ -891,14 +924,14 @@ for LOSS_TYPE in loss_types_to_train:
         # Create per-timestep loaders
         per_ts_train_loader = DataLoader(
             per_ts_train_dataset,
-            batch_size=BATCH_SIZE,
+            batch_size=BATCH_SIZE_PER_TIMESTEP,  # Large batch for per-timestep
             shuffle=True,
             num_workers=2,
             pin_memory=True
         )
         per_ts_val_loader = DataLoader(
             per_ts_val_dataset,
-            batch_size=BATCH_SIZE,
+            batch_size=BATCH_SIZE_PER_TIMESTEP,  # Large batch for per-timestep
             shuffle=False,
             num_workers=2,
             pin_memory=True
@@ -907,14 +940,14 @@ for LOSS_TYPE in loss_types_to_train:
         # Create sequence loaders
         seq_train_loader = DataLoader(
             seq_train_dataset,
-            batch_size=BATCH_SIZE,
+            batch_size=BATCH_SIZE_SEQUENCE,  # Smaller batch for sequences
             shuffle=True,
             num_workers=2,
             pin_memory=True
         )
         seq_val_loader = DataLoader(
             seq_val_dataset,
-            batch_size=BATCH_SIZE,
+            batch_size=BATCH_SIZE_SEQUENCE,  # Smaller batch for sequences
             shuffle=False,
             num_workers=2,
             pin_memory=True
@@ -970,14 +1003,14 @@ for LOSS_TYPE in loss_types_to_train:
         # Create per-timestep loaders
         per_ts_train_loader = DataLoader(
             per_ts_train_dataset,
-            batch_size=BATCH_SIZE,
+            batch_size=BATCH_SIZE_PER_TIMESTEP,  # Large batch for per-timestep
             shuffle=True,
             num_workers=2,
             pin_memory=True
         )
         per_ts_val_loader = DataLoader(
             per_ts_val_dataset,
-            batch_size=BATCH_SIZE,
+            batch_size=BATCH_SIZE_PER_TIMESTEP,  # Large batch for per-timestep
             shuffle=False,
             num_workers=2,
             pin_memory=True
@@ -986,14 +1019,14 @@ for LOSS_TYPE in loss_types_to_train:
         # Create sequence loaders
         seq_train_loader = DataLoader(
             seq_train_dataset,
-            batch_size=BATCH_SIZE,
+            batch_size=BATCH_SIZE_SEQUENCE,  # Smaller batch for sequences
             shuffle=True,
             num_workers=2,
             pin_memory=True
         )
         seq_val_loader = DataLoader(
             seq_val_dataset,
-            batch_size=BATCH_SIZE,
+            batch_size=BATCH_SIZE_SEQUENCE,  # Smaller batch for sequences
             shuffle=False,
             num_workers=2,
             pin_memory=True
@@ -1027,14 +1060,14 @@ for LOSS_TYPE in loss_types_to_train:
 
         seq_train_loader = DataLoader(
             seq_train_dataset,
-            batch_size=BATCH_SIZE,
+            batch_size=BATCH_SIZE_SEQUENCE,  # Sequence batch size
             shuffle=True,
             num_workers=2,
             pin_memory=True
         )
         seq_val_loader = DataLoader(
             seq_val_dataset,
-            batch_size=BATCH_SIZE,
+            batch_size=BATCH_SIZE_SEQUENCE,  # Sequence batch size
             shuffle=False,
             num_workers=2,
             pin_memory=True
@@ -1054,7 +1087,7 @@ for LOSS_TYPE in loss_types_to_train:
         num_epochs=50,
         learning_rate=1e-3,
         optimizer_type=optimizer_type,
-        batch_size=BATCH_SIZE,
+        batch_size=BATCH_SIZE_SEQUENCE,  # Config parameter (not directly used by dataloaders)
         weight_decay=1e-4,
         scheduler_type='cosine',
         cosine_eta_min=1e-6,

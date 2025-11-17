@@ -276,21 +276,25 @@ class CDONDataset(Dataset):
                 - 'target': [] - scalar response at timestep
                 - 'time_coord': [] - scalar time in [0, 1]
                 - 'penalty': [] - scalar weight = 1/max(|response|)²
+                - 'sample_idx': int - sample index for cache lookup
 
             For 'sequence' mode:
-                Tuple: (input [1, 4000], target [1, 4000]) - full sequences without causal padding
+                Tuple: (input [1, 4000], target [1, 4000], idx: int) - full sequences + index
         """
         if self.mode == 'per_timestep':
+            # Compute earthquake index from per-timestep idx
+            sample_idx = idx // self.n_timesteps  # Which earthquake this timestep belongs to
             return {
                 'input': self.windowed_inputs[idx],      # [signal_length]
                 'target': self.windowed_targets[idx],    # [] scalar
                 'time_coord': self.time_coords[idx],     # [] scalar
-                'penalty': self.penalty_weights_expanded[idx]  # [] scalar
+                'penalty': self.penalty_weights_expanded[idx],  # [] scalar
+                'sample_idx': sample_idx  # NEW: For cache lookup
             }
         else:  # mode == 'sequence'
-            # Sequence mode: return simple sequences [1, signal_length]
+            # Sequence mode: return simple sequences [1, signal_length] + index for cache lookup
             # No causal padding - works for all models (DeepONet, FNO, UNet)
-            return (self.sequence_inputs[idx], self.sequence_targets[idx])
+            return (self.sequence_inputs[idx], self.sequence_targets[idx], idx)
 
     def get_raw_earthquake(self, earthquake_idx: int) -> Tuple[np.ndarray, np.ndarray]:
         """

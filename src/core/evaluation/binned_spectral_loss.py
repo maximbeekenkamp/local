@@ -71,6 +71,7 @@ class BinnedSpectralLoss(nn.Module):
         binning_mode: str = 'linear',
         signal_length: int = 4000,
         cache_path: str = None,
+        target_cache_path: str = None,  # NEW parameter for target spectra cache
         lambda_k_mode: str = 'k_squared',
         use_log: bool = False,
         use_output_norm: bool = True,
@@ -147,6 +148,13 @@ class BinnedSpectralLoss(nn.Module):
 
         # Register as buffer so it moves with model to GPU/CPU
         self.register_buffer('bin_edges', bin_edges)
+
+        # LOAD precomputed target spectra cache (for training speedup)
+        self.target_cache = None
+        if target_cache_path is not None:
+            self.target_cache = self._load_target_cache(target_cache_path)
+            print(f"  ✓ Loaded target cache: {target_cache_path}")
+            print(f"    Cached samples: {self.target_cache.shape[0]}")
 
         # Bin-specific weights λ_k (BSP paper Algorithm 1, Table 4)
         # Compute based on lambda_k_mode
@@ -247,13 +255,85 @@ class BinnedSpectralLoss(nn.Module):
             print(f"⚠️  Upsampled bin edges: {cached_n_bins} → {n_bins} bins (cache resolution lower than requested)")
             return bin_edges
 
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def _load_target_cache(self, cache_path: str) -> torch.Tensor:
+        """
+        Load precomputed target spectra from cache.
+
+        Args:
+            cache_path: Path to cached target spectra (.npz file)
+
+        Returns:
+            target_binned: [N, C, n_bins] preprocessed binned target spectra
+
+        Raises:
+            ValueError: If cache config doesn't match current loss config
+        """
+        import numpy as np
+
+        cached = np.load(cache_path)
+
+        # Validate cache matches current config
+        assert cached['n_bins'] == self.n_bins, \
+            f"Cache n_bins={cached['n_bins']} != config n_bins={self.n_bins}"
+        assert cached['use_log'] == self.use_log, \
+            f"Cache use_log={cached['use_log']} != config use_log={self.use_log}"
+
+        # Convert to tensor and register as buffer (moves with model to device)
+        target_binned = torch.from_numpy(cached['target_binned']).float()  # [N, C, n_bins]
+
+        return target_binned
+
+    def _preprocess_target_only(self, target: torch.Tensor) -> torch.Tensor:
+        """
+        Preprocess target to binned spectrum WITHOUT computing loss.
+
+        Used by precomputation script to cache target spectra.
+        Extracts steps 1-6 from forward(): norm, FFT, power, log, binning, minmax.
+
+        Args:
+            target: [B, C, T] target signals
+
+        Returns:
+            target_binned: [B, C, n_bins] preprocessed binned energies
+        """
+        B, C, T = target.shape
+        eps = self.epsilon
+
+        # Step 1: Output normalization (optional)
+        if self.use_output_norm:
+            target_mean = target.mean(dim=-1, keepdim=True)
+            target_std = target.std(dim=-1, keepdim=True)
+            target = (target - target_mean) / (target_std + eps)
+
+        # Step 2: FFT
+        target_fft = torch.fft.rfft(target, dim=-1)  # [B, C, T//2+1]
+
+        # Step 3: Power spectrum
+        target_energy = 0.5 * torch.abs(target_fft) ** 2
+
+        # Step 4: Log transform (optional)
+        if self.use_log:
+            target_energy = torch.log10(target_energy + eps)
+
+        # Step 5: Binning
+        target_binned = self._bin_energy_1d(target_energy, T)  # [B, C, n_bins]
+
+        # Step 6: Min-max normalization (optional)
+        if self.use_minmax_norm:
+            temp_min = target_binned.min(dim=-1, keepdim=True).values
+            temp_max = target_binned.max(dim=-1, keepdim=True).values
+            target_binned = (target_binned - temp_min) / (temp_max - temp_min + eps)
+
+        return target_binned
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor, sample_indices: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Compute Binned Spectral Power loss with optional normalization.
 
         Args:
             pred: Predicted output [B, C, T] where T=4000
             target: Ground truth [B, C, T]
+            sample_indices: Optional [B] tensor of dataset indices for cache lookup
 
         Returns:
             Scalar BSP loss (weighted by μ)
@@ -295,29 +375,38 @@ class BinnedSpectralLoss(nn.Module):
             target_std = target.std(dim=-1, keepdim=True)
             target = (target - target_mean) / (target_std + self.epsilon)
 
-        # Step 1: Compute 1D real FFT
+        # Step 1: Compute pred spectrum (always needed)
         # Shape: [B, C, T] → [B, C, T//2+1] complex
         pred_fft = torch.fft.rfft(pred, dim=-1)
-        target_fft = torch.fft.rfft(target, dim=-1)
 
-        # Step 2: Compute power spectrum (BSP paper Algorithm 1, line 93)
+        # Step 2: Compute pred power spectrum
         # E = (1/2)|û|² for energy per mode
         # Shape: [B, C, T//2+1] complex → [B, C, T//2+1] real
         pred_energy = 0.5 * torch.abs(pred_fft) ** 2
-        target_energy = 0.5 * torch.abs(target_fft) ** 2
 
         # Step 2.5: Log transform (Log BSP variant)
         if self.use_log:
-            # Apply log10 to energies (helps with wide dynamic range)
-            # Add epsilon before log to avoid log(0)
             pred_energy = torch.log10(pred_energy + self.epsilon)
-            target_energy = torch.log10(target_energy + self.epsilon)
 
-        # Step 3: Bin-average energies
+        # Step 3: Bin-average pred energy
         # Shape: [B, C, T//2+1] → [B, C, n_bins]
         T = pred.shape[-1]
         pred_binned = self._bin_energy_1d(pred_energy, T)
-        target_binned = self._bin_energy_1d(target_energy, T)
+
+        # Step 4: Get target spectrum (from cache or compute)
+        if self.target_cache is not None and sample_indices is not None:
+            # Load from cache (FAST - avoids FFT, binning, normalization)
+            target_binned = self.target_cache[sample_indices]  # [B, C, n_bins]
+            target_binned = target_binned.to(pred.device)
+        else:
+            # Fallback: compute on-the-fly (slower but always works)
+            target_fft = torch.fft.rfft(target, dim=-1)
+            target_energy = 0.5 * torch.abs(target_fft) ** 2
+
+            if self.use_log:
+                target_energy = torch.log10(target_energy + self.epsilon)
+
+            target_binned = self._bin_energy_1d(target_energy, T)
 
         # Step 4: Per-sample min-max normalization (reference implementation)
         if self.use_minmax_norm:
