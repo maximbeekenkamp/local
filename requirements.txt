@@ -1,15 +1,17 @@
-# PyTorch - use compatible versions
+# Core dependencies
+numpy>=2.0.0  # Note: In Colab, requires runtime restart after install
 torch>=2.0.0,<2.6.0
 torchvision>=0.15.0
-numpy>=2.0.0
 scipy>=1.10.0
 matplotlib>=3.7.0
 tqdm>=4.65.0
-pytest>=7.3.0
 neuraloperator>=0.3.0
 siren-pytorch>=0.1.0
 rich>=13.0.0
 
-# Optional for Jupyter notebooks
-jupyter>=1.0.0
-ipykernel>=6.23.0
+# Testing (optional)
+pytest>=7.3.0
+
+# Jupyter notebooks (optional - skip in Colab, already installed)
+# jupyter>=1.0.0
+# ipykernel>=6.23.0

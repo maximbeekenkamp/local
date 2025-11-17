@@ -88,12 +88,16 @@ print(f"✓ Cleared {len(modules_to_reload)} cached modules")
 print("  Run Cell 1 to reimport all modules with latest code")"""),
 
     # Cell 3: Markdown
-    markdown_cell("""## Cell 1a: Setup Repository & Install NumPy (Colab-Ready)
+    markdown_cell("""## Cell 1: Setup & Imports (Colab-Ready)
 
-**⚠️ IMPORTANT**: After running this cell, the runtime will automatically restart.
-After restart, skip this cell and run Cell 1b directly."""),
+**⚠️ IMPORTANT - NumPy Compatibility**:
+If you get an AttributeError about `_blas_supports_fpe`, it means numpy needs to be reloaded:
+1. Go to Runtime → Restart Runtime
+2. Re-run this cell
 
-    # Cell 4a: Code (NumPy upgrade with runtime restart)
+This only needs to be done once per session."""),
+
+    # Cell 4: Code
     code_cell("""# Google Colab setup
 import sys
 import os
@@ -123,66 +127,42 @@ try:
 except:
     pass
 
-# Install dependencies - IMPORTANT: Upgrade numpy FIRST to avoid binary incompatibility
-print("\\n📦 Installing NumPy 2.x (fixes binary compatibility)...")
-!pip install "numpy>=2.0.0" --upgrade -q
-print("✅ NumPy upgraded to 2.x")
-
-print("\\n🔄 Restarting runtime to load new NumPy binaries...")
-print("   After restart, skip this cell and run Cell 1b instead.")
-
-# Trigger runtime restart in Colab
-import os
-if 'COLAB_GPU' in os.environ or 'google.colab' in sys.modules:
-    import IPython
-    app = IPython.Application.instance()
-    app.kernel.do_shutdown(True)
-else:
-    print("   ⚠️  Not in Colab - skipping auto-restart. Please restart manually if needed.")"""),
-
-    # Cell 4b: Markdown
-    markdown_cell("""## Cell 1b: Install Dependencies & Imports
-
-**Run this cell after the runtime restarts from Cell 1a.**
-
-If you skipped Cell 1a (already ran it once), you can run this cell directly."""),
-
-    # Cell 4c: Code (Other dependencies and imports)
-    code_cell("""# Google Colab setup
-import sys
-import os
-from pathlib import Path
-
-# Ensure we're in repo directory
-try:
-    os.chdir('/content/local')
-    print(f"✅ Working directory: {os.getcwd()}")
-except:
-    # Not in Colab, already in correct directory
-    pass
-
-# Install remaining dependencies
-print("\\n📦 Installing remaining dependencies...")
+# Install dependencies
+print("\\n📦 Installing dependencies...")
 !pip install -r requirements.txt -q
 print("✅ Dependencies installed")
+
+# Check numpy version before importing
+import numpy as np
+print(f"\\n📌 NumPy version: {np.__version__}")
+if np.__version__.startswith('1.'):
+    print("⚠️  WARNING: NumPy 1.x detected. You may need to restart runtime.")
+    print("   Go to Runtime → Restart Runtime, then re-run this cell.")
 
 # Standard imports
 import torch
 import matplotlib.pyplot as plt
-import numpy as np
 from torch.utils.data import DataLoader
 
-# Project imports
-from src.core.data_processing.cdon_dataset import CDONDataset
-from src.core.data_processing.cdon_transforms import CDONNormalization
-from src.core.models.model_factory import create_model
-from src.core.training.simple_trainer import SimpleTrainer
-from configs.training_config import TrainingConfig
+# Project imports - wrapped in try/except to catch numpy issues
+try:
+    from src.core.data_processing.cdon_dataset import CDONDataset
+    from src.core.data_processing.cdon_transforms import CDONNormalization
+    from src.core.models.model_factory import create_model
+    from src.core.training.simple_trainer import SimpleTrainer
+    from configs.training_config import TrainingConfig
 
-print("\\n✓ Imports successful")
-print(f"PyTorch version: {torch.__version__}")
-print(f"NumPy version: {np.__version__}")
-print(f"CUDA available: {torch.cuda.is_available()}")"""),
+    print("\\n✓ Imports successful")
+    print(f"PyTorch version: {torch.__version__}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+except AttributeError as e:
+    if '_blas_supports_fpe' in str(e):
+        print("\\n❌ NumPy binary incompatibility detected!")
+        print("\\n🔧 FIX: Go to Runtime → Restart Runtime, then re-run this cell.")
+        print("   (This happens when numpy is upgraded but old binaries are still loaded)")
+        raise
+    else:
+        raise"""),
 
     # Cell 5: Markdown
     markdown_cell("""## Cell 2: Configuration
@@ -284,7 +264,11 @@ print(f"  Batch size (per-timestep): {BATCH_SIZE_PER_TIMESTEP}")
 print(f"  Batch size (sequence): {BATCH_SIZE_SEQUENCE}")
 
 # Inspect a sample
-sample_input, sample_target = train_dataset[0]
+sample = train_dataset[0]
+if len(sample) == 3:
+    sample_input, sample_target, sample_idx = sample
+else:
+    sample_input, sample_target = sample
 print(f"\\nSample shapes:")
 print(f"  Input: {sample_input.shape}")
 print(f"  Target: {sample_target.shape}")
