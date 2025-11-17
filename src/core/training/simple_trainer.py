@@ -575,6 +575,10 @@ class SimpleTrainer:
         total_bsp_loss = 0.0
         num_batches = 0
 
+        # Collect predictions and targets for eval metrics
+        all_predictions = []
+        all_targets = []
+
         if self.is_deeponet and self.per_timestep_val_loader is not None:
             # DeepONet with dual-batch validation
             # Cycle sequence loader to match per-timestep loader length
@@ -618,6 +622,10 @@ class SimpleTrainer:
                 total_bsp_loss += bsp_loss.item()
                 num_batches += 1
 
+                # Collect for eval metrics
+                all_predictions.append(seq_outputs.detach().cpu())
+                all_targets.append(seq_targets.detach().cpu())
+
         else:
             # FNO/UNet or DeepONet with sequence-only validation
             for batch in self.sequence_val_loader:
@@ -650,6 +658,10 @@ class SimpleTrainer:
                 total_bsp_loss += bsp_component.item()
                 num_batches += 1
 
+                # Collect for eval metrics
+                all_predictions.append(seq_outputs.detach().cpu())
+                all_targets.append(seq_targets.detach().cpu())
+
         # Average metrics
         avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
 
@@ -658,6 +670,19 @@ class SimpleTrainer:
         if self.is_deeponet:
             metrics['mse_loss'] = total_mse_loss / num_batches if num_batches > 0 else 0.0
             metrics['bsp_loss'] = total_bsp_loss / num_batches if num_batches > 0 else 0.0
+
+        # Compute additional evaluation metrics if requested
+        if len(all_predictions) > 0 and self.config.eval_metrics:
+            all_preds_tensor = torch.cat(all_predictions, dim=0)  # [N, C, T]
+            all_targets_tensor = torch.cat(all_targets, dim=0)    # [N, C, T]
+
+            if 'field_error' in self.config.eval_metrics:
+                field_error = compute_field_error(all_preds_tensor, all_targets_tensor)
+                metrics['field_error'] = field_error
+
+            if 'spectrum_error' in self.config.eval_metrics:
+                spectrum_error = compute_spectrum_error_1d(all_preds_tensor, all_targets_tensor)
+                metrics['spectrum_error'] = spectrum_error
 
         # Add SA-BSP weight monitoring
         if self.adapt_mode and self.adapt_mode != 'none':
