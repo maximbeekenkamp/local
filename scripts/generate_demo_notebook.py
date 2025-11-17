@@ -839,11 +839,13 @@ for LOSS_TYPE in loss_types_to_train:
     print(f"✓ Fresh model created ({num_params:,} parameters)")
 
     # ========================================================================
-    # AUTOMATIC LOADER SELECTION: DeepONet uses dual-batch for BSP losses
+    # AUTOMATIC LOADER SELECTION: DeepONet always uses dual-batch
     # ========================================================================
 
     # Determine which loaders are needed based on model and loss
-    use_dual_batch = (MODEL_ARCH == 'deeponet' and LOSS_TYPE != 'baseline')
+    # DeepONet: Always use dual-batch (even for baseline, to handle dictionary format)
+    # FNO/UNet: Sequence-only
+    use_dual_batch = (MODEL_ARCH == 'deeponet')
 
     if use_dual_batch:
         # DeepONet + BSP/SA-BSP: DUAL-BATCH training
@@ -924,9 +926,12 @@ for LOSS_TYPE in loss_types_to_train:
         print(f"  ✓ Sequence val:       {len(seq_val_dataset)} samples")
 
     elif MODEL_ARCH == 'deeponet' and LOSS_TYPE == 'baseline':
-        # DeepONet + baseline: PER-TIMESTEP only (MSE only, no BSP)
-        print(f"\\n📊 Creating per-timestep loaders (MSE-only baseline)...")
+        # DeepONet + baseline: DUAL-BATCH (MSE only, but needs both loaders for trainer)
+        # Note: BSP weight is 0 for baseline, but we use dual-batch infrastructure
+        # to correctly handle dictionary format from per-timestep loaders
+        print(f"\\n📊 Creating dual-batch loaders (per-timestep + sequence)...")
 
+        # Create per-timestep datasets for MSE component
         per_ts_train_dataset = CDONDataset(
             data_dir=str(DATA_DIR),
             split='train',
@@ -944,6 +949,25 @@ for LOSS_TYPE in loss_types_to_train:
             signal_length=4000
         )
 
+        # Create sequence datasets for dual-batch infrastructure
+        seq_train_dataset = CDONDataset(
+            data_dir=str(DATA_DIR),
+            split='train',
+            normalize=normalizer,
+            mode='sequence',
+            use_causal_sequence=False,  # Sequences never use causal padding
+            signal_length=4000
+        )
+        seq_val_dataset = CDONDataset(
+            data_dir=str(DATA_DIR),
+            split='test',
+            normalize=normalizer,
+            mode='sequence',
+            use_causal_sequence=False,
+            signal_length=4000
+        )
+
+        # Create per-timestep loaders
         per_ts_train_loader = DataLoader(
             per_ts_train_dataset,
             batch_size=BATCH_SIZE,
@@ -959,8 +983,26 @@ for LOSS_TYPE in loss_types_to_train:
             pin_memory=True
         )
 
+        # Create sequence loaders
+        seq_train_loader = DataLoader(
+            seq_train_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=True,
+            num_workers=2,
+            pin_memory=True
+        )
+        seq_val_loader = DataLoader(
+            seq_val_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=False,
+            num_workers=2,
+            pin_memory=True
+        )
+
         print(f"  ✓ Per-timestep train: {len(per_ts_train_dataset):,} samples")
         print(f"  ✓ Per-timestep val:   {len(per_ts_val_dataset):,} samples")
+        print(f"  ✓ Sequence train:     {len(seq_train_dataset)} samples")
+        print(f"  ✓ Sequence val:       {len(seq_val_dataset)} samples")
 
     else:
         # FNO/UNet: SEQUENCE only (all losses)
@@ -1029,6 +1071,7 @@ for LOSS_TYPE in loss_types_to_train:
     # Create trainer with appropriate loader API
     if use_dual_batch:
         # Dual-batch API: pass both per-timestep and sequence loaders
+        # For DeepONet (includes baseline, BSP, SA-BSP)
         trainer = SimpleTrainer(
             model=model_for_loss,
             per_timestep_train_loader=per_ts_train_loader,
@@ -1040,18 +1083,6 @@ for LOSS_TYPE in loss_types_to_train:
             experiment_name=f'{MODEL_ARCH}_{LOSS_TYPE}'
         )
         print(f"\\n✓ Trainer initialized with DUAL-BATCH mode")
-
-    elif MODEL_ARCH == 'deeponet' and LOSS_TYPE == 'baseline':
-        # Baseline: Use simplified API (maps train_loader to sequence_train_loader internally)
-        trainer = SimpleTrainer(
-            model=model_for_loss,
-            train_loader=per_ts_train_loader,    # Use simplified API
-            val_loader=per_ts_val_loader,        # Maps to sequence loaders internally
-            config=config,
-            loss_config=selected_loss_config,
-            experiment_name=f'{MODEL_ARCH}_{LOSS_TYPE}'
-        )
-        print(f"\\n✓ Trainer initialized with PER-TIMESTEP mode (via simplified API)")
 
     else:
         # Sequence-only API
