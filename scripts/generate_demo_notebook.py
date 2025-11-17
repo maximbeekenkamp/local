@@ -280,7 +280,8 @@ val_loader = DataLoader(
 print(f"\\n✓ Data loaded successfully")
 print(f"  Train samples: {len(train_dataset)}")
 print(f"  Val samples: {len(val_dataset)}")
-print(f"  Batch size: {BATCH_SIZE}")
+print(f"  Batch size (per-timestep): {BATCH_SIZE_PER_TIMESTEP}")
+print(f"  Batch size (sequence): {BATCH_SIZE_SEQUENCE}")
 
 # Inspect a sample
 sample_input, sample_target = train_dataset[0]
