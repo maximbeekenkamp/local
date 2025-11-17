@@ -4,11 +4,8 @@ UNet architecture for 1D temporal data.
 Implements encoder-decoder with skip connections for learning
 temporal mappings (earthquake accelerations → structural displacements).
 
-Causality is enforced through DATA PREPROCESSING (zero-padding), not architectural constraints.
-This matches the reference CausalityDeepONet implementation from the CDON dataset paper.
-
-Input data should be zero-padded using prepare_causal_sequence_data() from
-src.data.preprocessing_utils to ensure output at time t only depends on input up to time t.
+This model operates on full sequences and is designed to work with spectral losses (BSP, SA-BSP).
+For per-timestep causal training with MSE loss, use DeepONet with prepare_causal_deeponet_data().
 
 Reference:
 - Ronneberger et al. "U-Net: Convolutional Networks for Biomedical Image Segmentation" (2015)
@@ -77,14 +74,13 @@ class UNet1D(nn.Module):
         - 3 decoder levels: ConvTranspose1d + skip connections + Conv1d blocks
         - Skip connections via concatenation
 
-    Causality:
-        Physical causality is enforced through DATA PREPROCESSING (zero-padding),
-        NOT through architectural constraints. This matches the reference
-        CausalityDeepONet paper implementation.
+    Usage:
+        This model operates on full sequences [batch, 1, signal_length] and is designed
+        for use with spectral losses (BSP, SA-BSP) that require complete sequences
+        for FFT operations.
 
-        The input data should be zero-padded such that output at time t only
-        uses information from times [0, ..., t]. Use prepare_causal_sequence_data()
-        from src.data.preprocessing_utils.
+        For per-timestep causal training with MSE loss, use DeepONet architecture
+        with prepare_causal_deeponet_data() preprocessing instead.
 
     Input shape: [batch, 1, signal_length]
     Output shape: [batch, 1, signal_length]
@@ -114,9 +110,8 @@ class UNet1D(nn.Module):
             num_groups: Groups for GroupNorm (default 4)
 
         Note:
-            For causal operation, preprocess inputs with prepare_causal_sequence_data()
-            from src.data.preprocessing_utils. This left-pads inputs with zeros to
-            enforce causality at the data level.
+            This model is designed for sequence-to-sequence prediction with spectral
+            losses. It operates on full sequences without causal preprocessing.
         """
         super().__init__()
 

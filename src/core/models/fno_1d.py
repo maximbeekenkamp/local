@@ -4,11 +4,8 @@ Fourier Neural Operator (FNO) for 1D temporal data.
 Wrapper around neuralop's FNO for learning temporal operators
 in the frequency domain (earthquake accelerations → structural displacements).
 
-Causality is enforced through DATA PREPROCESSING (zero-padding), not architectural constraints.
-This matches the reference CausalityDeepONet implementation from the CDON dataset paper.
-
-Input data should be zero-padded using prepare_causal_sequence_data() from
-src.data.preprocessing_utils to ensure output at time t only depends on input up to time t.
+This model operates on full sequences and is designed to work with spectral losses (BSP, SA-BSP).
+For per-timestep causal training with MSE loss, use DeepONet with prepare_causal_deeponet_data().
 
 Reference:
 - Li et al. "Fourier Neural Operator for Parametric PDEs" (2021)
@@ -41,14 +38,13 @@ class FNO1D(nn.Module):
         3. IFFT: Transform back to time domain
         4. Skip connection: Add to original
 
-    Causality:
-        Physical causality is enforced through DATA PREPROCESSING (zero-padding),
-        NOT through architectural constraints. This matches the reference
-        CausalityDeepONet paper implementation.
+    Usage:
+        This model operates on full sequences [batch, 1, signal_length] and is designed
+        for use with spectral losses (BSP, SA-BSP) that require complete sequences
+        for FFT operations.
 
-        The input data should be zero-padded such that output at time t only
-        uses information from times [0, ..., t]. Use prepare_causal_sequence_data()
-        from src.data.preprocessing_utils.
+        For per-timestep causal training with MSE loss, use DeepONet architecture
+        with prepare_causal_deeponet_data() preprocessing instead.
 
     Input shape: [batch, 1, signal_length]
     Output shape: [batch, 1, signal_length]
@@ -79,9 +75,8 @@ class FNO1D(nn.Module):
             ImportError: If neuralop is not installed
 
         Note:
-            For causal operation, preprocess inputs with prepare_causal_sequence_data()
-            from src.data.preprocessing_utils. This left-pads inputs with zeros to
-            enforce causality at the data level.
+            This model is designed for sequence-to-sequence prediction with spectral
+            losses. It operates on full sequences without causal preprocessing.
         """
         super().__init__()
 
@@ -123,8 +118,7 @@ class FNO1D(nn.Module):
 
         Args:
             x: Input tensor of shape [batch, channels, timesteps]
-               For causal operation, should be zero-padded via
-               prepare_causal_sequence_data() preprocessing
+               Full sequences without causal preprocessing
 
         Returns:
             Output tensor of shape [batch, channels, timesteps]
