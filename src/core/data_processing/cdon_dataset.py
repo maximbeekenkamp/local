@@ -14,7 +14,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from typing import Optional, Tuple, Dict
 from .cdon_transforms import CDONNormalization
-from src.data.preprocessing_utils import prepare_causal_deeponet_data, prepare_causal_sequence_data, create_penalty_weights
+from src.data.preprocessing_utils import prepare_causal_deeponet_data, create_penalty_weights
 
 
 class CDONDataset(Dataset):
@@ -242,20 +242,12 @@ class CDONDataset(Dataset):
                 loads_tensor[i] = self.normalize.normalize_loads(loads_tensor[i])
                 responses_tensor[i] = self.normalize.normalize_responses(responses_tensor[i])
 
-        if self.use_causal_sequence:
-            # Use causal zero-padding for DeepONet BSP loss
-            # Returns: [N, T, signal_length] inputs and [N, T] targets
-            self.sequence_inputs, self.sequence_targets = prepare_causal_sequence_data(
-                loads_tensor,
-                responses_tensor,
-                signal_length=self.signal_length
-            )
-            # Targets shape: [N, T] - no channel dimension needed for causal sequence
-        else:
-            # Use full sequences without padding for FNO/UNet
-            # Add channel dimension: [N, T] → [N, 1, T]
-            self.sequence_inputs = loads_tensor.unsqueeze(1)   # [N, 1, signal_length]
-            self.sequence_targets = responses_tensor.unsqueeze(1)  # [N, 1, signal_length]
+        # Sequence mode: Always use full sequences without causal padding
+        # This is correct for BSP loss and matches FNO/UNet behavior
+        # Note: Causal padding (use_causal_sequence) only applies to per-timestep mode
+        # Add channel dimension: [N, T] → [N, 1, T]
+        self.sequence_inputs = loads_tensor.unsqueeze(1)   # [N, 1, signal_length]
+        self.sequence_targets = responses_tensor.unsqueeze(1)  # [N, 1, signal_length]
 
         # Total samples: number of earthquakes
         self.n_samples = self.n_earthquakes
@@ -286,7 +278,7 @@ class CDONDataset(Dataset):
                 - 'penalty': [] - scalar weight = 1/max(|response|)²
 
             For 'sequence' mode:
-                Tuple: (input [1, 4000], target [1, 4000]) - full sequences without padding
+                Tuple: (input [1, 4000], target [1, 4000]) - full sequences without causal padding
         """
         if self.mode == 'per_timestep':
             return {
@@ -296,17 +288,9 @@ class CDONDataset(Dataset):
                 'penalty': self.penalty_weights_expanded[idx]  # [] scalar
             }
         else:  # mode == 'sequence'
-            if self.use_causal_sequence:
-                # For causal sequences in sequence mode:
-                # Use last timestep's window (contains full sequence) for branch input
-                # sequence_inputs: [N, T, signal_length] -> [idx, -1:, :] -> [1, signal_length]
-                # sequence_targets: [N, T] -> [idx] -> [T] -> unsqueeze -> [1, T]
-                input_seq = self.sequence_inputs[idx, -1:, :]  # Take last timestep: [1, signal_length]
-                target_seq = self.sequence_targets[idx].unsqueeze(0)  # Add channel dim: [1, T]
-                return (input_seq, target_seq)
-            else:
-                # For non-causal: already shaped [1, signal_length]
-                return (self.sequence_inputs[idx], self.sequence_targets[idx])
+            # Sequence mode: return simple sequences [1, signal_length]
+            # No causal padding - works for all models (DeepONet, FNO, UNet)
+            return (self.sequence_inputs[idx], self.sequence_targets[idx])
 
     def get_raw_earthquake(self, earthquake_idx: int) -> Tuple[np.ndarray, np.ndarray]:
         """
