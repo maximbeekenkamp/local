@@ -88,9 +88,12 @@ print(f"✓ Cleared {len(modules_to_reload)} cached modules")
 print("  Run Cell 1 to reimport all modules with latest code")"""),
 
     # Cell 3: Markdown
-    markdown_cell("""## Cell 1: Setup & Imports (Colab-Ready)"""),
+    markdown_cell("""## Cell 1a: Setup Repository & Install NumPy (Colab-Ready)
 
-    # Cell 4: Code
+**⚠️ IMPORTANT**: After running this cell, the runtime will automatically restart.
+After restart, skip this cell and run Cell 1b directly."""),
+
+    # Cell 4a: Code (NumPy upgrade with runtime restart)
     code_cell("""# Google Colab setup
 import sys
 import os
@@ -121,12 +124,45 @@ except:
     pass
 
 # Install dependencies - IMPORTANT: Upgrade numpy FIRST to avoid binary incompatibility
-print("\\n📦 Installing dependencies...")
-print("🔧 Upgrading numpy to 2.x (fixes binary compatibility)...")
+print("\\n📦 Installing NumPy 2.x (fixes binary compatibility)...")
 !pip install "numpy>=2.0.0" --upgrade -q
-print("✅ NumPy upgraded")
+print("✅ NumPy upgraded to 2.x")
 
-print("📦 Installing other dependencies...")
+print("\\n🔄 Restarting runtime to load new NumPy binaries...")
+print("   After restart, skip this cell and run Cell 1b instead.")
+
+# Trigger runtime restart in Colab
+import os
+if 'COLAB_GPU' in os.environ or 'google.colab' in sys.modules:
+    import IPython
+    app = IPython.Application.instance()
+    app.kernel.do_shutdown(True)
+else:
+    print("   ⚠️  Not in Colab - skipping auto-restart. Please restart manually if needed.")"""),
+
+    # Cell 4b: Markdown
+    markdown_cell("""## Cell 1b: Install Dependencies & Imports
+
+**Run this cell after the runtime restarts from Cell 1a.**
+
+If you skipped Cell 1a (already ran it once), you can run this cell directly."""),
+
+    # Cell 4c: Code (Other dependencies and imports)
+    code_cell("""# Google Colab setup
+import sys
+import os
+from pathlib import Path
+
+# Ensure we're in repo directory
+try:
+    os.chdir('/content/local')
+    print(f"✅ Working directory: {os.getcwd()}")
+except:
+    # Not in Colab, already in correct directory
+    pass
+
+# Install remaining dependencies
+print("\\n📦 Installing remaining dependencies...")
 !pip install -r requirements.txt -q
 print("✅ Dependencies installed")
 
