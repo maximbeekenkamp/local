@@ -319,13 +319,15 @@ class SelfAdaptiveBSPLoss(nn.Module):
             init_values=init_values
         )
 
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, pred: torch.Tensor, target: torch.Tensor,
+                sample_indices: torch.Tensor = None) -> torch.Tensor:
         """
         Compute Self-Adaptive BSP loss.
 
         Args:
             pred: Predicted output [B, C, T]
             target: Ground truth [B, C, T]
+            sample_indices: Optional sample indices for target cache lookup
 
         Returns:
             Scalar SA-BSP loss (weighted)
@@ -338,7 +340,7 @@ class SelfAdaptiveBSPLoss(nn.Module):
         """
         # Step 1: Compute per-bin errors
         # Shape: [n_bins]
-        bin_errors = self.bsp_module.compute_bin_errors(pred, target)
+        bin_errors = self.bsp_module.compute_bin_errors(pred, target, sample_indices=sample_indices)
 
         # Step 2: Get adaptive weights and ensure they're on the same device as bin_errors
         weights = self.adaptive_weights()  # [n_components]

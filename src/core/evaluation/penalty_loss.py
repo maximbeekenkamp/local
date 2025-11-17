@@ -91,19 +91,21 @@ class PenaltyWeightedLoss(nn.Module):
 
         return penalty
 
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, pred: torch.Tensor, target: torch.Tensor,
+                sample_indices: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Forward pass with penalty weighting.
 
         Args:
             pred: Predicted tensor [B, ...]
             target: Target tensor [B, ...]
+            sample_indices: Optional sample indices (passed to base loss)
 
         Returns:
             Weighted loss (scalar)
         """
         # Compute base loss (assume it reduces to scalar or per-sample)
-        base_loss_value = self.base_loss(pred, target)
+        base_loss_value = self.base_loss(pred, target, sample_indices=sample_indices)
 
         # Compute penalty weights
         penalty = self.compute_penalty(target)
@@ -178,13 +180,15 @@ class MSEWithPenalty(nn.Module):
         self.epsilon = epsilon
         self.per_sample = per_sample
 
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, pred: torch.Tensor, target: torch.Tensor,
+                sample_indices: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Compute MSE with penalty weighting.
 
         Args:
             pred: Predicted tensor [B, ...]
             target: Target tensor [B, ...]
+            sample_indices: Optional sample indices (ignored, for API compatibility)
 
         Returns:
             Penalty-weighted MSE loss (scalar)

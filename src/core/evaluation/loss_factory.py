@@ -64,7 +64,8 @@ class CombinedLoss(nn.Module):
         self.base_loss = base_loss
         self.spectral_loss = spectral_loss
 
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, pred: torch.Tensor, target: torch.Tensor,
+                sample_indices: torch.Tensor = None) -> torch.Tensor:
         """
         Compute combined loss.
 
@@ -78,6 +79,7 @@ class CombinedLoss(nn.Module):
         Args:
             pred: Predicted output [B, C, T]
             target: Ground truth [B, C, T]
+            sample_indices: Optional sample indices for target spectrum cache lookup
 
         Returns:
             Scalar loss value
@@ -89,8 +91,8 @@ class CombinedLoss(nn.Module):
         # Import here to avoid circular dependency
         from .adaptive_spectral_loss import SelfAdaptiveBSPLoss
 
-        loss_base = self.base_loss(pred, target)
-        loss_spectral = self.spectral_loss(pred, target)
+        loss_base = self.base_loss(pred, target, sample_indices=sample_indices)
+        loss_spectral = self.spectral_loss(pred, target, sample_indices=sample_indices)
 
         # Default weights (static)
         w_mse = 1.0

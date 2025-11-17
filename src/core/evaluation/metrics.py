@@ -53,7 +53,8 @@ class FieldErrorLoss(nn.Module):
         super().__init__()
         self.epsilon = epsilon
 
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, pred: torch.Tensor, target: torch.Tensor,
+                sample_indices: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Compute field error loss.
 
@@ -62,6 +63,7 @@ class FieldErrorLoss(nn.Module):
                   Full-sequence: [batch, channels, timesteps]
                   Per-timestep: [batch] - scalars
             target: Ground truth (same shape as pred)
+            sample_indices: Optional sample indices (ignored, for API compatibility)
 
         Returns:
             Loss value (scalar tensor)

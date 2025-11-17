@@ -553,7 +553,8 @@ class BinnedSpectralLoss(nn.Module):
     def compute_bin_errors(
         self,
         pred: torch.Tensor,
-        target: torch.Tensor
+        target: torch.Tensor,
+        sample_indices: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
         Compute per-bin relative errors (for analysis and SA-BSP).
@@ -561,6 +562,7 @@ class BinnedSpectralLoss(nn.Module):
         Args:
             pred: Predicted output [B, C, T]
             target: Ground truth [B, C, T]
+            sample_indices: Optional sample indices for target cache lookup
 
         Returns:
             Per-bin squared relative errors [n_bins]
