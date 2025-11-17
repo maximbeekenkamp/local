@@ -824,29 +824,194 @@ for LOSS_TYPE in loss_types_to_train:
     print(f"\\n{'='*70}")
     print(f"Training {MODEL_ARCH.upper()} with {LOSS_TYPE.upper()} Loss")
     print(f"{'='*70}\\n")
-    
+
     # Select loss configuration
     selected_loss_config = loss_config_map[LOSS_TYPE]
     print(f"Loss config: {selected_loss_config.description}")
-    
+
     # Create loss function
     criterion = create_loss(selected_loss_config)
     print(f"✓ Loss function created: {type(criterion).__name__}")
-    
+
     # Create FRESH model for this loss type (important!)
     model_for_loss = create_model(MODEL_ARCH)
     num_params = sum(p.numel() for p in model_for_loss.parameters() if p.requires_grad)
     print(f"✓ Fresh model created ({num_params:,} parameters)")
-    
+
+    # ========================================================================
+    # AUTOMATIC LOADER SELECTION: DeepONet uses dual-batch for BSP losses
+    # ========================================================================
+
+    # Determine which loaders are needed based on model and loss
+    use_dual_batch = (MODEL_ARCH == 'deeponet' and LOSS_TYPE != 'baseline')
+
+    if use_dual_batch:
+        # DeepONet + BSP/SA-BSP: DUAL-BATCH training
+        # MSE uses per-timestep (320K samples), BSP uses sequences (80 samples)
+        print(f"\\n📊 Creating dual-batch loaders (per-timestep + sequence)...")
+
+        # Create per-timestep datasets for MSE component
+        per_ts_train_dataset = CDONDataset(
+            data_dir=str(DATA_DIR),
+            split='train',
+            normalize=normalizer,
+            mode='per_timestep',
+            use_causal_sequence=USE_CAUSAL_PADDING,
+            signal_length=4000
+        )
+        per_ts_val_dataset = CDONDataset(
+            data_dir=str(DATA_DIR),
+            split='test',
+            normalize=normalizer,
+            mode='per_timestep',
+            use_causal_sequence=USE_CAUSAL_PADDING,
+            signal_length=4000
+        )
+
+        # Create sequence datasets for BSP component
+        seq_train_dataset = CDONDataset(
+            data_dir=str(DATA_DIR),
+            split='train',
+            normalize=normalizer,
+            mode='sequence',
+            use_causal_sequence=False,  # Sequences never use causal padding
+            signal_length=4000
+        )
+        seq_val_dataset = CDONDataset(
+            data_dir=str(DATA_DIR),
+            split='test',
+            normalize=normalizer,
+            mode='sequence',
+            use_causal_sequence=False,
+            signal_length=4000
+        )
+
+        # Create per-timestep loaders
+        per_ts_train_loader = DataLoader(
+            per_ts_train_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=True,
+            num_workers=2,
+            pin_memory=True
+        )
+        per_ts_val_loader = DataLoader(
+            per_ts_val_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=False,
+            num_workers=2,
+            pin_memory=True
+        )
+
+        # Create sequence loaders
+        seq_train_loader = DataLoader(
+            seq_train_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=True,
+            num_workers=2,
+            pin_memory=True
+        )
+        seq_val_loader = DataLoader(
+            seq_val_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=False,
+            num_workers=2,
+            pin_memory=True
+        )
+
+        print(f"  ✓ Per-timestep train: {len(per_ts_train_dataset):,} samples")
+        print(f"  ✓ Per-timestep val:   {len(per_ts_val_dataset):,} samples")
+        print(f"  ✓ Sequence train:     {len(seq_train_dataset)} samples")
+        print(f"  ✓ Sequence val:       {len(seq_val_dataset)} samples")
+
+    elif MODEL_ARCH == 'deeponet' and LOSS_TYPE == 'baseline':
+        # DeepONet + baseline: PER-TIMESTEP only (MSE only, no BSP)
+        print(f"\\n📊 Creating per-timestep loaders (MSE-only baseline)...")
+
+        per_ts_train_dataset = CDONDataset(
+            data_dir=str(DATA_DIR),
+            split='train',
+            normalize=normalizer,
+            mode='per_timestep',
+            use_causal_sequence=USE_CAUSAL_PADDING,
+            signal_length=4000
+        )
+        per_ts_val_dataset = CDONDataset(
+            data_dir=str(DATA_DIR),
+            split='test',
+            normalize=normalizer,
+            mode='per_timestep',
+            use_causal_sequence=USE_CAUSAL_PADDING,
+            signal_length=4000
+        )
+
+        per_ts_train_loader = DataLoader(
+            per_ts_train_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=True,
+            num_workers=2,
+            pin_memory=True
+        )
+        per_ts_val_loader = DataLoader(
+            per_ts_val_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=False,
+            num_workers=2,
+            pin_memory=True
+        )
+
+        print(f"  ✓ Per-timestep train: {len(per_ts_train_dataset):,} samples")
+        print(f"  ✓ Per-timestep val:   {len(per_ts_val_dataset):,} samples")
+
+    else:
+        # FNO/UNet: SEQUENCE only (all losses)
+        print(f"\\n📊 Creating sequence loaders ({MODEL_ARCH.upper()} architecture)...")
+
+        seq_train_dataset = CDONDataset(
+            data_dir=str(DATA_DIR),
+            split='train',
+            normalize=normalizer,
+            mode='sequence',
+            use_causal_sequence=False,
+            signal_length=4000
+        )
+        seq_val_dataset = CDONDataset(
+            data_dir=str(DATA_DIR),
+            split='test',
+            normalize=normalizer,
+            mode='sequence',
+            use_causal_sequence=False,
+            signal_length=4000
+        )
+
+        seq_train_loader = DataLoader(
+            seq_train_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=True,
+            num_workers=2,
+            pin_memory=True
+        )
+        seq_val_loader = DataLoader(
+            seq_val_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=False,
+            num_workers=2,
+            pin_memory=True
+        )
+
+        print(f"  ✓ Sequence train: {len(seq_train_dataset)} samples")
+        print(f"  ✓ Sequence val:   {len(seq_val_dataset)} samples")
+
+    # ========================================================================
+    # CREATE TRAINER with appropriate loader API
+    # ========================================================================
+
     # Create training config
-    # Select optimizer based on architecture
-    # FNO has complex-valued Fourier layers incompatible with SOAP
     optimizer_type = 'adam' if MODEL_ARCH == 'fno' else 'soap'
-    
+
     config = TrainingConfig(
         num_epochs=50,
         learning_rate=1e-3,
-        optimizer_type=optimizer_type,  # Adam for FNO, SOAP for others
+        optimizer_type=optimizer_type,
         batch_size=BATCH_SIZE,
         weight_decay=1e-4,
         scheduler_type='cosine',
@@ -860,21 +1025,49 @@ for LOSS_TYPE in loss_types_to_train:
         num_workers=2,
         verbose=True
     )
-    
-    # Create trainer
-    trainer = SimpleTrainer(
-        model=model_for_loss,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        config=config,
-        loss_config=selected_loss_config,
-        experiment_name=f'{MODEL_ARCH}_{LOSS_TYPE}'
-    )
-    
-    print(f"✓ Trainer initialized")
+
+    # Create trainer with appropriate loader API
+    if use_dual_batch:
+        # Dual-batch API: pass both per-timestep and sequence loaders
+        trainer = SimpleTrainer(
+            model=model_for_loss,
+            per_timestep_train_loader=per_ts_train_loader,
+            sequence_train_loader=seq_train_loader,
+            per_timestep_val_loader=per_ts_val_loader,
+            sequence_val_loader=seq_val_loader,
+            config=config,
+            loss_config=selected_loss_config,
+            experiment_name=f'{MODEL_ARCH}_{LOSS_TYPE}'
+        )
+        print(f"\\n✓ Trainer initialized with DUAL-BATCH mode")
+
+    elif MODEL_ARCH == 'deeponet' and LOSS_TYPE == 'baseline':
+        # Per-timestep-only API
+        trainer = SimpleTrainer(
+            model=model_for_loss,
+            train_loader=per_ts_train_loader,
+            val_loader=per_ts_val_loader,
+            config=config,
+            loss_config=selected_loss_config,
+            experiment_name=f'{MODEL_ARCH}_{LOSS_TYPE}'
+        )
+        print(f"\\n✓ Trainer initialized with PER-TIMESTEP mode")
+
+    else:
+        # Sequence-only API
+        trainer = SimpleTrainer(
+            model=model_for_loss,
+            train_loader=seq_train_loader,
+            val_loader=seq_val_loader,
+            config=config,
+            loss_config=selected_loss_config,
+            experiment_name=f'{MODEL_ARCH}_{LOSS_TYPE}'
+        )
+        print(f"\\n✓ Trainer initialized with SEQUENCE mode")
+
     print(f"  Device: {trainer.device}")
     print(f"  Optimizer: {type(trainer.optimizer).__name__}")
-    
+
     # Check for weight optimizer (SA-BSP variants only)
     if 'sa-bsp' in LOSS_TYPE:
         if trainer.weight_optimizer is not None:
@@ -882,18 +1075,18 @@ for LOSS_TYPE in loss_types_to_train:
             print(f"  Weight optimizer: ✓ Created for SA-BSP ({adapt_mode} mode)")
         else:
             print(f"  ⚠ WARNING: SA-BSP but no weight_optimizer!")
-    
+
     print(f"\\n🚀 Starting training...\\n")
-    
+
     # Train
     results = trainer.train()
-    
+
     # Store results
     key = f"{MODEL_ARCH}_{LOSS_TYPE}"
     all_training_results[key] = results
     all_trainers[key] = trainer
     trained_models[key] = model_for_loss
-    
+
     print(f"\\n✅ {LOSS_TYPE.upper()} training complete!")
     print(f"   Best val loss: {results['best_val_loss']:.6f}")
     print(f"   Final val loss: {results['val_history'][-1]['loss']:.6f}")
@@ -977,6 +1170,7 @@ axes[0].set_xlabel('Epoch', fontsize=12)
 axes[0].set_ylabel('Validation Loss', fontsize=12)
 axes[0].set_title('Validation Loss Comparison', fontsize=14, fontweight='bold')
 axes[0].set_yscale('log')  # LOG SCALE
+axes[0].set_ylim(bottom=1e-5, top=1.0)  # Clip for readability
 axes[0].legend(fontsize=9, loc='best')
 axes[0].grid(True, alpha=0.3, which='both')
 
@@ -984,6 +1178,7 @@ axes[1].set_xlabel('Epoch', fontsize=12)
 axes[1].set_ylabel('Field Error', fontsize=12)
 axes[1].set_title('Field Error (Real Space)', fontsize=14, fontweight='bold')
 axes[1].set_yscale('log')  # LOG SCALE
+axes[1].set_ylim(bottom=1e-5, top=1.0)  # Clip for readability
 axes[1].legend(fontsize=9, loc='best')
 axes[1].grid(True, alpha=0.3, which='both')
 
@@ -991,6 +1186,7 @@ axes[2].set_xlabel('Epoch', fontsize=12)
 axes[2].set_ylabel('Spectrum Error', fontsize=12)
 axes[2].set_title('Spectrum Error (Frequency Space)', fontsize=14, fontweight='bold')
 axes[2].set_yscale('log')  # LOG SCALE
+axes[2].set_ylim(bottom=1e-5, top=1.0)  # Clip for readability
 axes[2].legend(fontsize=9, loc='best')
 axes[2].grid(True, alpha=0.3, which='both')
 
@@ -1194,8 +1390,8 @@ ax.set_title(f'Energy Spectrum Comparison with Percentile Uncertainty Bands\\n{M
 ax.legend(fontsize=10, loc='best', framealpha=0.95, ncol=1)
 ax.grid(True, alpha=0.3, which='both', linestyle='--')
 
-# Set nice axis limits
-ax.set_xlim(k_true.min() * 0.9, k_true.max() * 1.1)
+# Set frequency range to 0-25Hz (full dataset range)
+ax.set_xlim(0, 25.0)
 
 plt.tight_layout()
 plt.show()

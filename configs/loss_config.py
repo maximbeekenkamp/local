@@ -185,19 +185,19 @@ BSP_CONFIG = LossConfig(
     loss_params={
         'base_loss': 'field_error',
         'spectral_loss': 'bsp',
-        'mu': 1.0,  # μ from paper (Table 4 - turbulence cases)
+        'mu': 1.0,  # μ = 1.0
         'n_bins': 32,
         'epsilon': 1e-8,  # Paper default
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
-        'lambda_k_mode': 'k_squared',  # λ_k = k² from paper Table 4
+        'lambda_k_mode': 'uniform',  # λ_k = 1.0 for all bins (uniform initialization)
         'use_log': False,  # Standard energy (not log10)
         'use_output_norm': True,  # Per-batch output normalization: y = (y - mean) / std
         'use_minmax_norm': True,  # Per-sample min-max normalization of binned energies
         'loss_type': 'mspe'  # Mean Squared Percentage Error (matches BSP paper Algorithm 1)
     },
-    description='MSE + BSP (μ=1.0, λ_k=k²) with normalization - Paper Table 4 turbulence'
+    description='MSE + BSP (μ=1.0, λ_k=1.0) with normalization - Uniform weighting'
 )
 
 SA_BSP_PERBIN_CONFIG = LossConfig(
@@ -212,13 +212,13 @@ SA_BSP_PERBIN_CONFIG = LossConfig(
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
-        'lambda_k_mode': 'k_squared',  # λ_k = k² initialization for trainable weights
-        'use_log': False,  # Standard energy (not log10)
+        'lambda_k_mode': 'uniform',  # λ_k = 1.0 initialization (uniform, matches log-bsp core)
+        'use_log': True,  # Log10 transform of energies (log-bsp core)
         'use_output_norm': True,  # Per-batch output normalization
         'use_minmax_norm': True,  # Per-sample min-max normalization
-        'loss_type': 'mspe'  # Mean Squared Percentage Error
+        'loss_type': 'l2_norm'  # L2 norm loss (matches log-bsp reference)
     },
-    description='MSE + SA-BSP (per-bin): 32 trainable λ_k weights (init: k²) with normalization - Paper Table 4'
+    description='MSE + SA-BSP (per-bin): 32 trainable λ_k weights (init: 1.0) with log-bsp core - Adaptive log-domain'
 )
 
 SA_BSP_GLOBAL_CONFIG = LossConfig(
@@ -233,13 +233,13 @@ SA_BSP_GLOBAL_CONFIG = LossConfig(
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
-        'lambda_k_mode': 'k_squared',  # λ_k = k² (static for global mode)
-        'use_log': False,  # Standard energy (not log10)
+        'lambda_k_mode': 'uniform',  # λ_k = 1.0 (uniform, static for global mode with log-bsp core)
+        'use_log': True,  # Log10 transform of energies (log-bsp core)
         'use_output_norm': True,  # Per-batch output normalization
         'use_minmax_norm': True,  # Per-sample min-max normalization
-        'loss_type': 'mspe'  # Mean Squared Percentage Error
+        'loss_type': 'l2_norm'  # L2 norm loss (matches log-bsp reference)
     },
-    description='MSE + SA-BSP (global): 2 trainable weights [w_mse=1.0, w_bsp=1.0] with normalization - competitive dynamics'
+    description='MSE + SA-BSP (global): 2 trainable weights [w_mse=1.0, w_bsp=1.0] with log-bsp core - Adaptive log-domain'
 )
 
 SA_BSP_COMBINED_CONFIG = LossConfig(
@@ -254,13 +254,13 @@ SA_BSP_COMBINED_CONFIG = LossConfig(
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
-        'lambda_k_mode': 'k_squared',  # λ_k = k² initialization for per-bin weights
-        'use_log': False,  # Standard energy (not log10)
+        'lambda_k_mode': 'uniform',  # λ_k = 1.0 initialization for per-bin weights (uniform, matches log-bsp core)
+        'use_log': True,  # Log10 transform of energies (log-bsp core)
         'use_output_norm': True,  # Per-batch output normalization
         'use_minmax_norm': True,  # Per-sample min-max normalization
-        'loss_type': 'mspe'  # Mean Squared Percentage Error
+        'loss_type': 'l2_norm'  # L2 norm loss (matches log-bsp reference)
     },
-    description='MSE + SA-BSP (combined): 34 trainable weights [w_mse=1.0, w_bsp=1.0, 32×λ_k=k²] with normalization'
+    description='MSE + SA-BSP (combined): 34 trainable weights [w_mse=1.0, w_bsp=1.0, 32×λ_k=1.0] with log-bsp core'
 )
 
 LOG_BSP_CONFIG = LossConfig(
