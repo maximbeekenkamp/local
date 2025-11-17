@@ -1042,16 +1042,16 @@ for LOSS_TYPE in loss_types_to_train:
         print(f"\\n✓ Trainer initialized with DUAL-BATCH mode")
 
     elif MODEL_ARCH == 'deeponet' and LOSS_TYPE == 'baseline':
-        # Per-timestep-only API (explicit per-timestep loaders)
+        # Baseline: Use simplified API (maps train_loader to sequence_train_loader internally)
         trainer = SimpleTrainer(
             model=model_for_loss,
-            per_timestep_train_loader=per_ts_train_loader,
-            per_timestep_val_loader=per_ts_val_loader,
+            train_loader=per_ts_train_loader,    # Use simplified API
+            val_loader=per_ts_val_loader,        # Maps to sequence loaders internally
             config=config,
             loss_config=selected_loss_config,
             experiment_name=f'{MODEL_ARCH}_{LOSS_TYPE}'
         )
-        print(f"\\n✓ Trainer initialized with PER-TIMESTEP mode")
+        print(f"\\n✓ Trainer initialized with PER-TIMESTEP mode (via simplified API)")
 
     else:
         # Sequence-only API
