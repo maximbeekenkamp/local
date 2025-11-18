@@ -2,14 +2,12 @@
 Metrics and loss functions for neural operator training.
 
 Provides:
-- FieldErrorLoss: Primary MSE metric - relative MSE in real space
-- compute_field_error: Functional form of field error
+- compute_mse: Standard MSE metric (matches reference CausalityDeepONet)
 - compute_spectrum_error_1d: Relative MSE in frequency domain (log power spectrum)
 
 Reference:
-- Field error from Generatively-Stabilised-NOs spectral_metrics.py
-  Reference formula: mean(mean((pred-target)², spatial) / mean(target², spatial))
-- Adapted spectrum error from 2D spatial to 1D temporal data
+- CausalityDeepONet uses standard MSE (torch.nn.MSELoss)
+- Spectrum error adapted from Generatively-Stabilised-NOs for 1D temporal data
 """
 
 import torch
@@ -17,134 +15,43 @@ import torch.nn as nn
 from typing import Optional
 
 
-class FieldErrorLoss(nn.Module):
-    """
-    Field error loss (relative MSE in real space) - PRIMARY MSE METRIC.
-
-    This is the recommended MSE loss function for neural operator training.
-    It measures prediction accuracy in the original (real/physical) space.
-
-    Formula:
-        field_error = mean(mean((pred - target)², spatial) / mean(target², spatial))
-
-    Advantages over standard MSE:
-    - Scale-invariant: Works across different magnitudes
-    - Spatially normalized: Focuses on relative error patterns
-    - Matches reference implementation from Generatively-Stabilised-NOs
-
-    Reference:
-        Generatively-Stabilised-NOs spectral_metrics.py
-        compute_field_error_loss() function
-        Original context: 2D spatial fields, adapted here for 1D temporal data
-
-    Note:
-        For per-timestep DeepONet predictions (1D tensors), this reduces to
-        element-wise relative error. For full sequences (3D tensors), it
-        computes spatially-averaged relative MSE.
-    """
-
-    def __init__(self, epsilon: float = 1e-8):
-        """
-        Initialize Field Error Loss.
-
-        Args:
-            epsilon: Small constant for numerical stability (default 1e-8)
-        """
-        super().__init__()
-        self.epsilon = epsilon
-
-    def forward(self, pred: torch.Tensor, target: torch.Tensor,
-                sample_indices: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """
-        Compute field error loss.
-
-        Args:
-            pred: Predicted output
-                  Full-sequence: [batch, channels, timesteps]
-                  Per-timestep: [batch] - scalars
-            target: Ground truth (same shape as pred)
-            sample_indices: Optional sample indices (ignored, for API compatibility)
-
-        Returns:
-            Loss value (scalar tensor)
-
-        Shape:
-            Full-sequence: [B, C, T] → scalar
-            Per-timestep: [B] → scalar (mean of relative errors)
-        """
-        # Handle per-timestep scalar predictions (1D tensors)
-        if pred.ndim == 1:
-            # Per-timestep case: [batch] of scalars
-            # Compute element-wise relative squared error
-            relative_error_sq = ((pred - target) ** 2) / ((target ** 2) + self.epsilon)
-            return relative_error_sq.mean()  # Mean over batch
-
-        # Handle full-sequence predictions (3D tensors)
-        else:
-            # Full-sequence case: [batch, channels, timesteps]
-            # Squared error: (pred - target)²
-            squared_error = (pred - target) ** 2
-
-            # Mean squared error over spatial dimensions (C, T)
-            spatial_mse = squared_error.mean(dim=(-2, -1))  # [B]
-
-            # Mean squared target over spatial dimensions
-            spatial_mean_sq = (target ** 2).mean(dim=(-2, -1))  # [B]
-
-            # Relative error per sample
-            relative_error = spatial_mse / (spatial_mean_sq + self.epsilon)  # [B]
-
-            # Mean over batch
-            return relative_error.mean()
-
-
-def compute_field_error(
+def compute_mse(
     pred: torch.Tensor,
     target: torch.Tensor,
-    epsilon: float = 1e-8,
     reduction: str = 'mean'
 ) -> torch.Tensor:
     """
-    Compute field error (relative MSE in real space).
+    Compute Mean Squared Error (standard MSE).
 
-    Field error measures prediction accuracy in the original (real) space,
-    as opposed to frequency space. It's the primary evaluation metric.
+    This is the standard MSE metric used in neural operator training,
+    matching the reference CausalityDeepONet implementation.
 
     Formula:
-        field_error = mean((pred - target)² / (target² + epsilon))
-
-    Reference: Generatively-Stabilised-NOs spectral_metrics.py
-               compute_field_error_loss()
+        mse = mean((pred - target)²)
 
     Args:
-        pred: Predicted output [batch, channels, timesteps]
-        target: Ground truth [batch, channels, timesteps]
-        epsilon: Small constant for numerical stability (default 1e-8)
+        pred: Predicted output [batch, channels, timesteps] or [batch]
+        target: Ground truth (same shape as pred)
         reduction: 'mean' or 'none' (default 'mean')
 
     Returns:
-        Field error (scalar if reduction='mean', [batch] if reduction='none')
+        MSE (scalar if reduction='mean', [batch] if reduction='none')
 
     Shape:
-        Input: [B, C, T]
+        Input: [B, C, T] or [B]
         Output: scalar (reduction='mean') or [B] (reduction='none')
     """
     # Squared error: (pred - target)²
     squared_error = (pred - target) ** 2
 
-    # Mean squared error over spatial dimensions (C, T)
-    spatial_mse = squared_error.mean(dim=(-2, -1))  # [B]
-
-    # Mean squared target over spatial dimensions
-    spatial_mean_sq = (target ** 2).mean(dim=(-2, -1))  # [B]
-
-    # Relative error per sample
-    relative_error = spatial_mse / (spatial_mean_sq + epsilon)  # [B]
-
     if reduction == 'mean':
-        return relative_error.mean()
+        return squared_error.mean()
     elif reduction == 'none':
-        return relative_error
+        # Mean over all dimensions except batch
+        if squared_error.ndim > 1:
+            return squared_error.mean(dim=tuple(range(1, squared_error.ndim)))
+        else:
+            return squared_error
     else:
         raise ValueError(f"Unknown reduction: '{reduction}'. Use 'mean' or 'none'")
 
@@ -232,7 +139,7 @@ def compute_all_metrics(
     Compute all evaluation metrics at once.
 
     Convenience function for validation/testing that computes:
-    - Field error (real space)
+    - MSE (real space)
     - Spectrum error (frequency space)
 
     Args:
@@ -242,15 +149,15 @@ def compute_all_metrics(
 
     Returns:
         Dictionary with keys:
-        - 'field_error': float
+        - 'mse': float
         - 'spectrum_error': float
 
     Example:
         >>> metrics = compute_all_metrics(pred, target)
-        >>> print(f"Field error: {metrics['field_error']:.4f}")
+        >>> print(f"MSE: {metrics['mse']:.4f}")
         >>> print(f"Spectrum error: {metrics['spectrum_error']:.4f}")
     """
     return {
-        'field_error': compute_field_error(pred, target, epsilon).item(),
+        'mse': compute_mse(pred, target).item(),
         'spectrum_error': compute_spectrum_error_1d(pred, target, epsilon).item()
     }

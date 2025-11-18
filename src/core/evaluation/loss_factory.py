@@ -2,7 +2,7 @@
 Loss function factory for configurable loss selection.
 
 Supports multiple loss types for ablation studies:
-- Field Error Loss (primary MSE metric - relative MSE in real space)
+- MSE Loss (baseline, matches reference CausalityDeepONet)
 - Binned Spectral Power (BSP) Loss
 - Self-Adaptive BSP (SA-BSP) Loss
 - Combined losses with weighting
@@ -11,9 +11,9 @@ Usage:
     from configs.loss_config import LossConfig, BASELINE_CONFIG, BSP_CONFIG
     from src.core.evaluation.loss_factory import create_loss
 
-    # Create field error loss
+    # Create MSE loss
     loss_fn = create_loss_from_dict({
-        'loss_type': 'field_error',
+        'loss_type': 'mse',
         'loss_params': {}
     })
 
@@ -29,7 +29,6 @@ import torch.nn as nn
 from typing import Dict, Any, Union
 
 from configs.loss_config import LossConfig
-from .metrics import FieldErrorLoss
 from .penalty_loss import PenaltyWeightedLoss, MSEWithPenalty
 
 
@@ -174,7 +173,7 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
     Examples:
         >>> from configs.loss_config import BASELINE_CONFIG, BSP_CONFIG
         >>> loss = create_loss(BASELINE_CONFIG)
-        >>> loss = create_loss({'loss_type': 'field_error', 'loss_params': {}})
+        >>> loss = create_loss({'loss_type': 'mse', 'loss_params': {}})
     """
     # Convert dict to LossConfig if needed
     if isinstance(config, dict):
@@ -191,10 +190,9 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
     # Create base loss
     base_loss = None
 
-    # Case 1: Field Error Loss
-    if loss_type == 'field_error':
-        epsilon = params.get('epsilon', 1e-8)
-        base_loss = FieldErrorLoss(epsilon=epsilon)
+    # Case 1: MSE Loss (standard, matches reference CausalityDeepONet)
+    if loss_type == 'mse':
+        base_loss = nn.MSELoss()
 
     # Case 2: Binned Spectral Power (BSP) Loss
     elif loss_type == 'bsp':
@@ -274,15 +272,16 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
 
     # Case 4: Combined Loss (Base + Spectral)
     elif loss_type == 'combined':
-        # Get base loss type (only field_error supported)
-        base_loss_type = params.get('base_loss', 'field_error')
-        if base_loss_type != 'field_error':
+        # Get base loss type (only mse supported)
+        base_loss_type = params.get('base_loss', 'mse')
+
+        if base_loss_type == 'mse':
+            base_loss = nn.MSELoss()
+        else:
             raise ValueError(
                 f"Unknown base_loss type: {base_loss_type}. "
-                f"Only 'field_error' is supported."
+                f"Only 'mse' is supported."
             )
-        epsilon = params.get('epsilon', 1e-8)
-        base_loss = FieldErrorLoss(epsilon=epsilon)
 
         # Get spectral loss type
         spectral_loss_type = params.get('spectral_loss')
@@ -376,7 +375,7 @@ def create_loss(config: Union[LossConfig, Dict[str, Any]]) -> nn.Module:
     else:
         raise ValueError(
             f"Unknown loss_type: {loss_type}. "
-            f"Must be one of: 'field_error', 'bsp', 'sa_bsp', 'combined'"
+            f"Must be one of: 'mse', 'bsp', 'sa_bsp', 'combined'"
         )
 
     # Apply penalty weighting if requested
@@ -404,7 +403,7 @@ def create_loss_from_dict(config_dict: Dict[str, Any]) -> nn.Module:
         >>> loss = create_loss_from_dict({
         ...     'loss_type': 'combined',
         ...     'loss_params': {
-        ...         'base_loss': 'field_error',
+        ...         'base_loss': 'mse',
         ...         'spectral_loss': 'bsp',
         ...         'n_bins': 32
         ...     }

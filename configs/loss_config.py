@@ -2,16 +2,16 @@
 Loss function configuration for neural operator training.
 
 Supports multiple loss types for ablation studies:
-- Field Error Loss (baseline)
+- MSE Loss (baseline, matches reference CausalityDeepONet)
 - Binned Spectral Power (BSP) Loss
 - Self-Adaptive BSP (SA-BSP) Loss
 - Combined losses with weighting
 
 Example configurations:
 
-    # Baseline (Field Error only)
+    # Baseline (MSE only)
     loss_config = LossConfig(
-        loss_type='field_error',
+        loss_type='mse',
         loss_params={}
     )
 
@@ -19,7 +19,7 @@ Example configurations:
     loss_config = LossConfig(
         loss_type='combined',
         loss_params={
-            'base_loss': 'field_error',
+            'base_loss': 'mse',
             'spectral_loss': 'bsp',
             'n_bins': 32,
             'epsilon': 1e-8
@@ -30,7 +30,7 @@ Example configurations:
     loss_config = LossConfig(
         loss_type='combined',
         loss_params={
-            'base_loss': 'field_error',
+            'base_loss': 'mse',
             'spectral_loss': 'sa_bsp',
             'n_bins': 32,
             'adapt_mode': 'per-bin',
@@ -50,7 +50,7 @@ class LossConfig:
 
     Attributes:
         loss_type: Type of loss function to use
-            - 'field_error': Field Error loss (baseline)
+            - 'mse': MSE loss (baseline, matches reference CausalityDeepONet)
             - 'bsp': Binned Spectral Power loss
             - 'sa_bsp': Self-Adaptive BSP loss
             - 'combined': Combination of base + spectral loss
@@ -59,7 +59,7 @@ class LossConfig:
 
     Loss-specific parameters:
 
-        For 'field_error':
+        For 'mse':
             No additional parameters needed
 
         For 'bsp':
@@ -85,7 +85,7 @@ class LossConfig:
             - cache_path (str): Path to precomputed spectrum cache for loading bin edges (optional)
 
         For 'combined':
-            - base_loss (str): Base loss type ('field_error')
+            - base_loss (str): Base loss type ('mse')
             - spectral_loss (str): Spectral loss type ('bsp' or 'sa_bsp')
             - lambda_spectral (float): Weight for spectral component (default: 1.0)
             - n_bins (int): Number of frequency bins (default: 32)
@@ -114,7 +114,7 @@ class LossConfig:
 
     def __post_init__(self):
         """Validate loss configuration."""
-        valid_types = ['field_error', 'bsp', 'sa_bsp', 'combined']
+        valid_types = ['mse', 'bsp', 'sa_bsp', 'combined']
         if self.loss_type not in valid_types:
             raise ValueError(
                 f"Invalid loss_type: {self.loss_type}. "
@@ -175,15 +175,15 @@ class LossConfig:
 
 # Predefined configurations for common use cases
 BASELINE_CONFIG = LossConfig(
-    loss_type='field_error',
+    loss_type='mse',  # Standard MSE (matches reference CausalityDeepONet)
     loss_params={},
-    description='Baseline: Field Error loss only'
+    description='Baseline: MSE loss only (reference implementation)'
 )
 
 BSP_CONFIG = LossConfig(
     loss_type='combined',
     loss_params={
-        'base_loss': 'field_error',
+        'base_loss': 'mse',
         'spectral_loss': 'bsp',
         'mu': 1.0,  # μ = 1.0
         'n_bins': 32,
@@ -204,7 +204,7 @@ BSP_CONFIG = LossConfig(
 SA_BSP_PERBIN_CONFIG = LossConfig(
     loss_type='combined',
     loss_params={
-        'base_loss': 'field_error',
+        'base_loss': 'mse',
         'spectral_loss': 'sa_bsp',
         'n_bins': 32,
         'adapt_mode': 'per-bin',  # 32 trainable weights (one per bin)
@@ -226,7 +226,7 @@ SA_BSP_PERBIN_CONFIG = LossConfig(
 SA_BSP_GLOBAL_CONFIG = LossConfig(
     loss_type='combined',
     loss_params={
-        'base_loss': 'field_error',
+        'base_loss': 'mse',
         'spectral_loss': 'sa_bsp',
         'n_bins': 32,
         'adapt_mode': 'global',  # 2 trainable weights (w_mse + w_bsp) for MSE/BSP balance
@@ -247,7 +247,7 @@ SA_BSP_GLOBAL_CONFIG = LossConfig(
 SA_BSP_COMBINED_CONFIG = LossConfig(
     loss_type='combined',
     loss_params={
-        'base_loss': 'field_error',
+        'base_loss': 'mse',
         'spectral_loss': 'sa_bsp',
         'n_bins': 32,
         'adapt_mode': 'combined',  # 34 weights: w_mse + w_bsp + 32 per-bin
@@ -268,7 +268,7 @@ SA_BSP_COMBINED_CONFIG = LossConfig(
 LOG_BSP_CONFIG = LossConfig(
     loss_type='combined',
     loss_params={
-        'base_loss': 'field_error',
+        'base_loss': 'mse',
         'spectral_loss': 'bsp',
         'mu': 1.0,  # μ = 1.0 for log variant
         'n_bins': 32,

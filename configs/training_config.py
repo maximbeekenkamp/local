@@ -89,7 +89,7 @@ class TrainingConfig:
 
     # Evaluation
     eval_metrics: List[str] = field(
-        default_factory=lambda: ['field_error', 'spectrum_error']
+        default_factory=lambda: ['mse', 'spectrum_error']
     )
     eval_frequency: int = 1
 
@@ -193,7 +193,7 @@ class TrainingConfig:
             )
 
         # Check metrics
-        valid_metrics = ['field_error', 'spectrum_error']
+        valid_metrics = ['mse', 'spectrum_error']
         for metric in self.eval_metrics:
             if metric not in valid_metrics:
                 raise ValueError(

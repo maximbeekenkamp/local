@@ -322,7 +322,7 @@ LOSS_CONFIGS = {
     'bsp': {
         'loss_type': 'combined',
         'loss_params': {
-            'base_loss': 'field_error',
+            'base_loss': 'mse',
             'spectral_loss': 'bsp',
             'mu': 1.0,
             'n_bins': N_BINS,
@@ -343,7 +343,7 @@ LOSS_CONFIGS = {
     'log_bsp': {
         'loss_type': 'combined',
         'loss_params': {
-            'base_loss': 'field_error',
+            'base_loss': 'mse',
             'spectral_loss': 'bsp',
             'mu': 1.0,
             'n_bins': N_BINS,
@@ -364,7 +364,7 @@ LOSS_CONFIGS = {
     'sa_bsp': {
         'loss_type': 'combined',
         'loss_params': {
-            'base_loss': 'field_error',
+            'base_loss': 'mse',
             'spectral_loss': 'sa_bsp',
             'n_bins': N_BINS,
             'adapt_mode': SA_ADAPT_MODE,   # Controlled by SA_ADAPT_MODE variable above
@@ -386,7 +386,7 @@ LOSS_CONFIGS = {
     'sa_log_bsp': {
         'loss_type': 'combined',
         'loss_params': {
-            'base_loss': 'field_error',
+            'base_loss': 'mse',
             'spectral_loss': 'sa_bsp',
             'n_bins': N_BINS,
             'adapt_mode': SA_ADAPT_MODE,   # Controlled by SA_ADAPT_MODE variable above
@@ -1119,7 +1119,7 @@ for LOSS_TYPE in loss_types_to_train:
         weight_decay=1e-4,
         scheduler_type='cosine',
         cosine_eta_min=1e-6,
-        eval_metrics=['field_error', 'spectrum_error'],
+        eval_metrics=['mse', 'spectrum_error'],
         eval_frequency=1,
         checkpoint_dir=f'checkpoints/{MODEL_ARCH}_{LOSS_TYPE}',
         save_best=False,
@@ -1229,10 +1229,10 @@ for loss_type in ['baseline', 'bsp', 'log-bsp', 'sa-bsp-perbin', 'sa-bsp-global'
     
     # Extract metrics
     val_losses = [h['loss'] for h in results['val_history']]
-    val_field_errors = [h['field_error'] for h in results['val_history']]
+    val_mses = [h['mse'] for h in results['val_history']]
     val_spectrum_errors = [h['spectrum_error'] for h in results['val_history']]
     epochs = range(1, len(val_losses) + 1)
-    
+
     # Create label with short name
     label_map = {
         'baseline': 'BASELINE',
@@ -1243,13 +1243,13 @@ for loss_type in ['baseline', 'bsp', 'log-bsp', 'sa-bsp-perbin', 'sa-bsp-global'
         'sa-bsp-combined': 'SA-BSP (Combined)'
     }
     label = label_map[loss_type]
-    
+
     # Plot on all 3 axes
-    axes[0].plot(epochs, val_losses, label=label, 
+    axes[0].plot(epochs, val_losses, label=label,
                 color=colors[loss_type], linestyle=linestyles[loss_type],
                 linewidth=2, alpha=0.9, marker=markers[loss_type], markersize=4, markevery=5)
-    
-    axes[1].plot(epochs, val_field_errors, label=label,
+
+    axes[1].plot(epochs, val_mses, label=label,
                 color=colors[loss_type], linestyle=linestyles[loss_type],
                 linewidth=2, alpha=0.9, marker=markers[loss_type], markersize=4, markevery=5)
     
@@ -1267,8 +1267,8 @@ axes[0].legend(fontsize=9, loc='best')
 axes[0].grid(True, alpha=0.3, which='both')
 
 axes[1].set_xlabel('Epoch', fontsize=12)
-axes[1].set_ylabel('Field Error', fontsize=12)
-axes[1].set_title('Field Error (Real Space)', fontsize=14, fontweight='bold')
+axes[1].set_ylabel('MSE', fontsize=12)
+axes[1].set_title('MSE (Real Space)', fontsize=14, fontweight='bold')
 axes[1].set_yscale('log')  # LOG SCALE
 axes[1].set_ylim(bottom=1e-5, top=1.0)  # Clip for readability
 axes[1].legend(fontsize=9, loc='best')
@@ -1291,17 +1291,17 @@ plt.show()
 print(f"\\n{'='*70}")
 print("Final Metrics Summary")
 print(f"{'='*70}")
-print(f"{'Loss Type':<25} {'Val Loss':<12} {'Field Error':<15} {'Spectrum Error':<15}")
+print(f"{'Loss Type':<25} {'Val Loss':<12} {'MSE':<15} {'Spectrum Error':<15}")
 print("-"*70)
 
 for loss_type in ['baseline', 'bsp', 'log-bsp', 'sa-bsp-perbin', 'sa-bsp-global', 'sa-bsp-combined']:
     key = f"{MODEL_ARCH}_{loss_type}"
     results = all_training_results[key]
     final_val = results['val_history'][-1]
-    
+
     label = loss_type.upper()
     print(f"{label:<25} {final_val['loss']:<12.6f} "
-          f"{final_val['field_error']:<15.6f} {final_val['spectrum_error']:<15.6f}")"""),
+          f"{final_val['mse']:<15.6f} {final_val['spectrum_error']:<15.6f}")"""),
 
     # Cell 22: Markdown
     markdown_cell("""## Cell 7: Spectral Bias Visualization (Energy Spectrum)

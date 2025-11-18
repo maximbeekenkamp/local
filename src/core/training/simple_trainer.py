@@ -34,7 +34,7 @@ from rich.console import Console
 
 from .optimizers.optimizer_factory import create_optimizer
 from ..evaluation.metrics import (
-    compute_field_error,
+    compute_mse,
     compute_spectrum_error_1d
 )
 from ..evaluation.loss_factory import create_loss, CombinedLoss
@@ -715,9 +715,9 @@ class SimpleTrainer:
             all_preds_tensor = torch.cat(all_predictions, dim=0)  # [N, C, T]
             all_targets_tensor = torch.cat(all_targets, dim=0)    # [N, C, T]
 
-            if 'field_error' in self.config.eval_metrics:
-                field_error = compute_field_error(all_preds_tensor, all_targets_tensor)
-                metrics['field_error'] = field_error
+            if 'mse' in self.config.eval_metrics:
+                mse = compute_mse(all_preds_tensor, all_targets_tensor)
+                metrics['mse'] = mse
 
             if 'spectrum_error' in self.config.eval_metrics:
                 spectrum_error = compute_spectrum_error_1d(all_preds_tensor, all_targets_tensor)

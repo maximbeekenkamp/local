@@ -110,7 +110,7 @@ def verify_single_model(
         Dictionary with verification results:
         - status: 'PASS' or 'FAIL'
         - val_loss: Final validation loss (or None if failed)
-        - field_error: Final field error (or None if failed)
+        - mse: Final MSE (or None if failed)
         - training_time: Time taken in seconds
         - error_message: Error message if failed (or None if passed)
     """
@@ -118,7 +118,7 @@ def verify_single_model(
         'arch': arch,
         'status': 'FAIL',
         'val_loss': None,
-        'field_error': None,
+        'mse': None,
         'spectrum_error': None,
         'training_time': 0.0,
         'error_message': None
@@ -165,7 +165,7 @@ def verify_single_model(
 
         result['status'] = 'PASS'
         result['val_loss'] = final_val['loss']
-        result['field_error'] = final_val['field_error']
+        result['mse'] = final_val['mse']
         result['spectrum_error'] = final_val.get('spectrum_error', None)
         result['training_time'] = end_time - start_time
 
@@ -228,7 +228,7 @@ def print_verification_summary(results: List[Dict[str, Any]]):
     table.add_column("Model", style="cyan", justify="left")
     table.add_column("Status", justify="center")
     table.add_column("Val Loss", justify="right")
-    table.add_column("Field Error", justify="right")
+    table.add_column("MSE", justify="right")
     table.add_column("Spectrum Error", justify="right")
     table.add_column("Time (s)", justify="right")
 
@@ -245,10 +245,10 @@ def print_verification_summary(results: List[Dict[str, Any]]):
         else:
             val_loss = "N/A"
 
-        if result['field_error'] is not None:
-            field_error = f"{result['field_error']:.4f}"
+        if result['mse'] is not None:
+            mse = f"{result['mse']:.4f}"
         else:
-            field_error = "N/A"
+            mse = "N/A"
 
         if result['spectrum_error'] is not None:
             spectrum_error = f"{result['spectrum_error']:.4f}"
@@ -261,7 +261,7 @@ def print_verification_summary(results: List[Dict[str, Any]]):
             result['arch'].upper(),
             status,
             val_loss,
-            field_error,
+            mse,
             spectrum_error,
             training_time
         )
