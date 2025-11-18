@@ -62,11 +62,12 @@ class TrainingConfig:
     """
 
     # Optimization
-    learning_rate: float = 3e-3
+    learning_rate: float = 1e-3  # Reference CausalityDeepONet uses 1e-3 (lowered from 3e-3 for stability with 567K model)
     num_epochs: int = 100
     batch_size: int = 16
     weight_decay: float = 1e-4
     optimizer_type: str = 'soap'  # 'adam', 'adamw', or 'soap'
+    max_grad_norm: float = 1.0  # Gradient clipping for stability (prevents NaN with large models)
 
     # SOAP Optimizer Parameters (only used when optimizer_type='soap')
     soap_betas: tuple = (0.95, 0.95)
