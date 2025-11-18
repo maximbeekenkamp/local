@@ -7,6 +7,32 @@ Supports multiple loss types for ablation studies:
 - Self-Adaptive BSP (SA-BSP) Loss
 - Combined losses with weighting
 
+Configuration Comparison Matrix:
+=============================================================================================================
+Config            | epsilon | lambda_k  | use_log | minmax_norm | loss_type | target_cache | adapt_mode
+-------------------------------------------------------------------------------------------------------------
+BASELINE          | N/A     | N/A       | N/A     | N/A         | N/A       | N/A          | N/A
+BSP               | 1e-8    | uniform   | False   | True        | mspe      | linear.npz   | N/A
+LOG_BSP           | 1e-8    | uniform   | True    | True        | l2_norm   | log.npz      | N/A
+WEIRD_LOG_BSP     | 1e-8    | uniform   | True    | False       | l2_norm   | log.npz      | N/A
+SA_BSP_PERBIN     | 1e-6    | uniform   | True    | True        | l2_norm   | log.npz      | per-bin
+SA_BSP_GLOBAL     | 1e-6    | uniform   | True    | True        | l2_norm   | log.npz      | global
+SA_BSP_COMBINED   | 1e-6    | uniform   | True    | True        | l2_norm   | log.npz      | combined
+=============================================================================================================
+
+Key Differences Explained:
+1. **epsilon**: All variants use 1e-8 for numerical stability (consistent across all loss types)
+2. **lambda_k_mode**: All variants use 'uniform' (λ_k=1) initialization
+3. **use_log**: LOG-BSP and SA-BSP variants use log₁₀ transform for wider dynamic range
+4. **use_minmax_norm**: WEIRD_LOG_BSP disables per-sample normalization to match absolute energies
+5. **loss_type**: BSP uses MSPE (paper formula), log variants use L2 norm (reference impl)
+6. **target_cache_path**: Linear for BSP, log for others (matches use_log setting)
+7. **adapt_mode**: Only SA-BSP variants have this (per-bin/global/combined adaptive weights)
+
+Normalization Strategy:
+- Standard variants (BSP, LOG_BSP, SA-BSP): use_minmax_norm=True → optimizes spectral SHAPE only
+- WEIRD_LOG_BSP (ablation): use_minmax_norm=False → optimizes absolute ENERGY matching
+
 Example configurations:
 
     # Baseline (MSE only)
@@ -96,17 +122,8 @@ class LossConfig:
             - adapt_mode (str): For SA-BSP, weight adaptation mode (default: 'per-bin')
             - init_weight (float): For SA-BSP, initial weight value (default: 1.0)
 
-        Penalty Loss Parameters (Optional - applies to all loss types):
-            - use_penalty (bool): Apply inverse-variance penalty weighting (default: False)
-                                 From reference: loss *= 1 / (max(abs(target))² + ε)
-                                 Emphasizes samples with larger responses
-            - penalty_epsilon (float): Numerical stability for penalty (default: 1e-8)
-            - penalty_per_sample (bool): Compute penalty per sample (True) or global (False)
-                                        (default: True)
-
         Reference:
-            Penalty weighting from Penwarden et al. "A metalearning approach for
-            physics-informed neural networks" (2023), CausalityDeepONet implementation.
+            MSE Loss: Standard mean squared error
     """
     loss_type: str
     loss_params: Dict[str, Any] = field(default_factory=dict)
@@ -209,7 +226,7 @@ SA_BSP_PERBIN_CONFIG = LossConfig(
         'n_bins': 32,
         'adapt_mode': 'per-bin',  # 32 trainable weights (one per bin)
         'init_weight': 1.0,
-        'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
+        'epsilon': 1e-8,  # Numerical stability constant
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
@@ -231,7 +248,7 @@ SA_BSP_GLOBAL_CONFIG = LossConfig(
         'n_bins': 32,
         'adapt_mode': 'global',  # 2 trainable weights (w_mse + w_bsp) for MSE/BSP balance
         'init_weight': 1.0,
-        'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
+        'epsilon': 1e-8,  # Numerical stability constant
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
@@ -252,7 +269,7 @@ SA_BSP_COMBINED_CONFIG = LossConfig(
         'n_bins': 32,
         'adapt_mode': 'combined',  # 34 weights: w_mse + w_bsp + 32 per-bin
         'init_weight': 1.0,
-        'epsilon': 1e-6,  # Increased from 1e-8 per paper ablation (Table 2)
+        'epsilon': 1e-8,  # Numerical stability constant
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
@@ -283,7 +300,28 @@ LOG_BSP_CONFIG = LossConfig(
         'use_minmax_norm': True,  # Per-sample min-max normalization: (E - min) / (max - min + eps)
         'loss_type': 'l2_norm'  # L2 norm loss (matches reference screenshot implementation)
     },
-    description='MSE + Log-BSP: log₁₀(E) with per-sample min-max norm + L2 loss - Reference implementation'
+    description='MSE + Log-BSP: log₁₀(E) with per-sample min-max norm + L2 loss - Optimizes spectral SHAPE'
+)
+
+WEIRD_LOG_BSP_CONFIG = LossConfig(
+    loss_type='combined',
+    loss_params={
+        'base_loss': 'mse',
+        'spectral_loss': 'bsp',
+        'mu': 1.0,  # μ = 1.0
+        'n_bins': 32,
+        'epsilon': 1e-8,
+        'binning_mode': 'linear',
+        'signal_length': 4000,  # CDON temporal resolution
+        'cache_path': 'cache/true_spectrum.npz',
+        'target_cache_path': 'cache/target_spectra_log.npz',  # Precomputed target spectra (log)
+        'lambda_k_mode': 'uniform',  # λ_k = 1 for all bins
+        'use_log': True,  # Log10 transform of energies
+        'use_output_norm': True,  # Per-batch output normalization: y = (y - mean) / std
+        'use_minmax_norm': False,  # NO per-sample normalization - preserves absolute energy scales
+        'loss_type': 'l2_norm'  # L2 norm loss
+    },
+    description='MSE + Weird-Log-BSP (ablation): log₁₀(E) WITHOUT min-max norm - Optimizes absolute ENERGY matching'
 )
 
 # Legacy alias for backward compatibility

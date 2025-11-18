@@ -111,7 +111,7 @@ class SimpleTrainer:
         Args:
             model: Neural operator model to train
             per_timestep_train_loader: Per-timestep training loader (DeepONet) or None (FNO/UNet)
-                Format: Dict with 'input', 'target', 'time_coord', 'penalty'
+                Format: Dict with 'input', 'target', 'time_coord'
             sequence_train_loader: Full-sequence training loader (all models)
                 Format: Tuple (input [B,1,T], target [B,1,T])
             per_timestep_val_loader: Per-timestep validation loader or None
@@ -167,9 +167,6 @@ class SimpleTrainer:
         # Loss function (required parameter)
         self.criterion = create_loss(loss_config)
         self.criterion.to(self.device)
-
-        # Penalty weighting (optional, from reference CausalityDeepONet)
-        self.use_penalty_weighting = loss_config.loss_params.get('use_penalty', False)
 
         # Loss configuration for dual-batch training
         self.loss_config = loss_config
@@ -441,18 +438,14 @@ class SimpleTrainer:
                 per_ts_inputs = per_timestep_batch['input'].to(self.device)      # [B, 4000]
                 per_ts_targets = per_timestep_batch['target'].to(self.device)     # [B]
                 per_ts_time_coords = per_timestep_batch['time_coord'].to(self.device)  # [B]
-                per_ts_penalties = per_timestep_batch['penalty'].to(self.device)  # [B]
 
                 # Forward per-timestep
                 per_ts_outputs = self.model.forward_per_timestep(per_ts_inputs, per_ts_time_coords)
                 per_ts_outputs = per_ts_outputs.squeeze(-1)  # [B, 1] → [B]
 
-                # Compute MSE loss
+                # Compute MSE loss (no penalty weighting - removed for consistency)
                 per_ts_loss = self.criterion(per_ts_outputs, per_ts_targets)
-                if self.use_penalty_weighting:
-                    mse_loss = (per_ts_loss * per_ts_penalties).mean()
-                else:
-                    mse_loss = per_ts_loss.mean() if per_ts_loss.ndim > 0 else per_ts_loss
+                mse_loss = per_ts_loss.mean() if per_ts_loss.ndim > 0 else per_ts_loss
 
                 # ===== Sequence forward (BSP loss) =====
                 # Extract inputs, targets, and sample indices
@@ -482,11 +475,12 @@ class SimpleTrainer:
                     self.weight_optimizer.zero_grad()
 
                 combined_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 self.optimizer.step()
                 self._update_adaptive_weights()
 
                 # Step scheduler (for cosine annealing, step every batch)
+                # NOTE: In dual-batch mode, scheduler steps ONCE per iteration (not twice)
+                # Both per-timestep and sequence batches share same optimizer step
                 if self.config.scheduler_type == 'cosine':
                     self.scheduler.step()
 
@@ -537,7 +531,6 @@ class SimpleTrainer:
 
                 # Backward pass
                 final_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 self.optimizer.step()
                 self._update_adaptive_weights()
 
@@ -617,7 +610,7 @@ class SimpleTrainer:
                 per_ts_targets = per_timestep_batch['target'].to(self.device)     # [B]
                 per_ts_time_coords = per_timestep_batch['time_coord'].to(self.device)  # [B]
 
-                # Forward per-timestep (no penalty weighting during validation)
+                # Forward per-timestep
                 per_ts_outputs = self.model.forward_per_timestep(per_ts_inputs, per_ts_time_coords)
                 per_ts_outputs = per_ts_outputs.squeeze(-1)  # [B, 1] → [B]
 
@@ -803,6 +796,39 @@ class SimpleTrainer:
 
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
 
+        # Validate loss config matches (enforce config consistency)
+        if 'loss_config' in checkpoint:
+            ckpt_loss_config = checkpoint['loss_config']
+            current_loss_config = {
+                'loss_type': self.config.loss_config.loss_type,
+                'loss_params': self.config.loss_config.loss_params
+            }
+
+            # Check loss type match
+            if ckpt_loss_config['loss_type'] != current_loss_config['loss_type']:
+                raise ValueError(
+                    f"Loss config mismatch!\n"
+                    f"  Checkpoint loss_type: {ckpt_loss_config['loss_type']}\n"
+                    f"  Current loss_type: {current_loss_config['loss_type']}\n"
+                    f"Cannot load checkpoint with different loss configuration.\n"
+                    f"Retrain from scratch or use matching loss config."
+                )
+
+            # Check critical params for spectral losses
+            if current_loss_config['loss_type'] in ['bsp', 'sa_bsp', 'combined']:
+                critical_params = ['n_bins', 'use_log', 'use_minmax_norm', 'loss_type', 'adapt_mode']
+                for param in critical_params:
+                    ckpt_val = ckpt_loss_config.get('loss_params', {}).get(param)
+                    current_val = current_loss_config['loss_params'].get(param)
+                    if ckpt_val != current_val and ckpt_val is not None and current_val is not None:
+                        raise ValueError(
+                            f"Loss param '{param}' mismatch!\n"
+                            f"  Checkpoint: {ckpt_val}\n"
+                            f"  Current: {current_val}\n"
+                            f"Cannot load checkpoint with different {param}.\n"
+                            f"Retrain from scratch or use matching config."
+                        )
+
         # Restore model state
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -811,11 +837,23 @@ class SimpleTrainer:
             self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
 
         # Restore weight optimizer state (for SA-BSP)
-        if self.weight_optimizer and checkpoint.get('weight_optimizer_state_dict'):
+        if self.weight_optimizer:
+            if 'weight_optimizer_state_dict' not in checkpoint:
+                raise ValueError(
+                    "Checkpoint missing 'weight_optimizer_state_dict' but SA-BSP is active.\n"
+                    "Cannot load checkpoint from non-SA-BSP training into SA-BSP model.\n"
+                    "Retrain from scratch or use matching loss configuration."
+                )
             self.weight_optimizer.load_state_dict(checkpoint['weight_optimizer_state_dict'])
 
         # Restore weight scheduler state (for SA-BSP)
-        if self.weight_scheduler and checkpoint.get('weight_scheduler_state_dict'):
+        if self.weight_scheduler:
+            if 'weight_scheduler_state_dict' not in checkpoint:
+                raise ValueError(
+                    "Checkpoint missing 'weight_scheduler_state_dict' but SA-BSP is active.\n"
+                    "Cannot load checkpoint from incompatible training configuration.\n"
+                    "Retrain from scratch or use matching loss configuration."
+                )
             self.weight_scheduler.load_state_dict(checkpoint['weight_scheduler_state_dict'])
 
         # Restore training state

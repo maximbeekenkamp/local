@@ -76,24 +76,24 @@ def prepare_causal_deeponet_data(
         # Result: [0, 0, ..., 0, input[0], input[1], ..., input[T-1]]
         #         |<- 3999 zeros ->|<-    4000 actual values     ->|
         padded_length = signal_length - 1 + signal_length  # 7999
-        loads_add_zero = np.zeros(padded_length, dtype=np.float32)
-        loads_add_zero[signal_length - 1:] = inputs_np[idx]  # Place actual signal after zeros
+        zero_padded_input = np.zeros(padded_length, dtype=np.float32)
+        zero_padded_input[signal_length - 1:] = inputs_np[idx]  # Place actual signal after zeros
 
         # Step 2: Create sliding windows for each output timestep
-        loads_in_train = np.zeros((signal_length, signal_length), dtype=np.float32)
+        windowed_inputs = np.zeros((signal_length, signal_length), dtype=np.float32)
 
         for t in range(signal_length):
             # Window from position t to t + signal_length
             # At t=0: [0, 0, ..., 0, input[0]]  (3999 zeros, then input[0])
             # At t=1: [0, 0, ..., 0, input[0], input[1]]  (3998 zeros, then input[0:2])
             # At t=3999: [input[0], input[1], ..., input[3999]]  (full signal, no zeros)
-            loads_in_train[t, :] = loads_add_zero[t : t + signal_length]
+            windowed_inputs[t, :] = zero_padded_input[t : t + signal_length]
 
         # Corresponding outputs (scalar per timestep)
-        responses_out_train = outputs_np[idx]  # [signal_length]
+        timestep_outputs = outputs_np[idx]  # [signal_length]
 
-        causal_inputs_list.append(loads_in_train)
-        causal_outputs_list.append(responses_out_train)
+        causal_inputs_list.append(windowed_inputs)
+        causal_outputs_list.append(timestep_outputs)
 
     # Stack all samples
     causal_inputs_np = np.vstack(causal_inputs_list)  # [N*T, signal_length]

@@ -129,6 +129,7 @@ def compute_cached_true_spectrum(
         # Binned spectrum for BSP loss training
         bin_edges=bin_edges,  # [n_bins+1] - for BSP loss consistency
         bsp_n_bins=n_bins,    # BSP bin count (e.g., 32)
+        binning_mode='linear',  # Always linear for this cache (log binning not used in viz)
         # Metadata
         timesteps=timesteps,
         freq_min=freq_min,

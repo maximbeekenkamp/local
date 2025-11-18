@@ -1,37 +1,43 @@
 """
 Self-Adaptive Binned Spectral Power (SA-BSP) Loss for 1D temporal neural operators.
 
-Extends BSP loss with learnable weights inspired by SA-PINNs (Self-Adaptive
-Physics-Informed Neural Networks). Three variants:
+Extends BSP loss with learnable weights using SA-PINNs (Self-Adaptive Physics-Informed
+Neural Networks) saddle-point optimization. Three variants with hierarchical structure:
 
-1. **Per-bin** (32 weights): Emphasizes difficult frequency bins
-2. **Global** (1 weight): Balances MSE vs BSP loss
-3. **Hierarchical** (33 weights): Both global and per-bin adaptation
+1. **Per-bin** (n_bins weights): Adaptive emphasis within BSP across frequency bins
+   - Secondary level: Frequencies compete for attention within BSP component
+   - All weights use gradient ascent (max_λ competitive dynamics)
 
-Key innovation: Uses SA-PINNs saddle-point optimization
-    - Model: min_θ L(θ, λ)  (standard gradient descent)
-    - Weights: max_λ L(θ, λ)  (negated gradients - ascent on loss)
+2. **Global** (2 weights): Primary level balancing MSE vs BSP components
+   - MSE biases toward low frequencies, BSP biases toward high frequencies
+   - Creates genuine conflict → competitive dynamics (gradient ascent)
 
-For per-bin weights, this encourages the model to reduce errors in all frequency
-bands by automatically increasing weights for hard-to-fit bins (typically high
-frequencies), effectively mitigating spectral bias.
+3. **Combined** (n_bins+2 weights): Hierarchical two-level adaptation
+   - Level 1 (Global): MSE vs BSP balance via gradient ascent on [w_mse, w_bsp]
+   - Level 2 (Per-bin): Frequency emphasis via gradient ascent on [λ_1, ..., λ_n]
+   - Both levels use SA-PINNs competitive dynamics
 
-Implementation follows SA-PINNs:
-- Raw weights (not log-space)
-- Unconstrained (can grow unbounded)
-- Negated gradients for per-bin weights
-- Standard gradients for global weight
+Key innovation: Hierarchical saddle-point optimization
+    - Model: min_θ L(θ, λ)  (standard gradient descent on network parameters)
+    - Weights: max_λ L(θ, λ)  (gradient ascent on adaptive weights - negated gradients)
+    - Primary conflict: MSE (low-freq bias) vs BSP (high-freq bias)
+    - Secondary conflict: Individual frequency bins compete for attention
+
+Implementation strictly follows SA-PINNs:
+- Raw unbounded weights (not log-space, no normalization)
+- Gradient ascent on ALL adaptive weights (negate gradients before optimizer step)
+- Separate optimizers for network and weights
 
 Reference:
-- SA-PINNs: "Understanding and Mitigating Gradient Flow Pathologies in
-  Physics-Informed Neural Networks" (McClenny & Braga-Neto, 2020)
+- SA-PINNs: "Self-Adaptive Physics-Informed Neural Networks using a Soft
+  Attention Mechanism" (McClenny & Braga-Neto, 2020) - arxiv:2009.04544
 - GitHub: https://github.com/levimcclenny/SA-PINNs
 
 Training requirements:
-    1. Main optimizer for model parameters
-    2. Separate optimizer for adaptive weights
-    3. Negate gradients for per-bin weights before optimizer step
-    4. Standard gradients for global weight
+    1. Main optimizer for model parameters (e.g., Adam with lr=1e-5)
+    2. Separate optimizer for adaptive weights (e.g., Adam with lr=1e-3)
+    3. Negate ALL weight gradients before optimizer step (gradient ascent)
+    4. Hierarchical dynamics emerge naturally from competing objectives
 
 Example (per-bin mode):
     >>> # Create loss
@@ -66,6 +72,19 @@ import numpy as np
 from typing import Optional
 
 from .binned_spectral_loss import BinnedSpectralLoss
+from .constants import (
+    INIT_WEIGHT_DEFAULT,
+    N_BINS_DEFAULT,
+    MU_DEFAULT,
+    EPSILON_DEFAULT,
+    BINNING_MODE_DEFAULT,
+    SIGNAL_LENGTH_CDON,
+    LAMBDA_K_MODE_DEFAULT,
+    USE_LOG_DEFAULT,
+    USE_OUTPUT_NORM_DEFAULT,
+    USE_MINMAX_NORM_DEFAULT,
+    LOSS_TYPE_BSP_DEFAULT
+)
 
 
 class SelfAdaptiveWeights(nn.Module):
@@ -113,12 +132,17 @@ class SelfAdaptiveWeights(nn.Module):
             negated gradients to naturally find optimal weights.
         """
         super().__init__()
-        self.n_components = n_components
-        self.mode = mode
+
+        # Input validation
+        if n_components <= 0:
+            raise ValueError(f"n_components must be positive, got {n_components}")
 
         valid_modes = ['per-bin', 'global', 'combined', 'none']
         if mode not in valid_modes:
             raise ValueError(f"mode must be one of {valid_modes}, got {mode}")
+
+        self.n_components = n_components
+        self.mode = mode
 
         # Set default initialization if not provided
         if init_values is None:
@@ -140,51 +164,34 @@ class SelfAdaptiveWeights(nn.Module):
             # Trainable parameters (raw weights, no log-space)
             self.weights = nn.Parameter(init_values)
 
-            # EMA buffer for smoothing (prevents rapid oscillations from gradient ascent)
-            # Beta=0.999 from 2024 BRDR paper
-            self.register_buffer('weights_ema', init_values.clone())
-            self.ema_beta = 0.999
-
     def forward(self) -> torch.Tensor:
         """
-        Get current adaptive weights with EMA smoothing and mean-one normalization.
+        Get current adaptive weights (pure SA-PINNs implementation).
 
         Returns:
-            Normalized and smoothed weights [n_components]
+            Raw unbounded weights [n_components]
 
         Shape:
             Output: [n_components]
 
         Note:
-            Two-stage stability approach (2024 BRDR paper):
-            1. EMA smoothing (β=0.999): Prevents rapid oscillations from gradient ascent
-            2. Mean-one normalization: Prevents unbounded weight growth
+            Following McClenny & Braga-Neto (2020), weights are returned RAW without
+            normalization or smoothing. Weights can grow unbounded during training,
+            which is the intended behavior of the saddle-point optimization.
 
-            This differs from original SA-PINNs (which uses unbounded weights)
-            but improves stability and convergence by ~1 order of magnitude.
+            The saddle point formulation trains the network to simultaneously:
+                - Minimize loss w.r.t. network parameters (gradient descent)
+                - Maximize loss w.r.t. adaptive weights (gradient ascent)
 
-            Formula:
-                w_ema = β * w_ema_old + (1-β) * w_raw  (during training only)
-                w_normalized = w_ema / mean(w_ema)
+            This forces the network to reduce errors where weights are large, while
+            weights naturally increase for hard-to-fit regions.
 
-            Fixed weights (mode='none') are returned without processing.
+            Reference: "Self-Adaptive Physics-Informed Neural Networks using a Soft
+            Attention Mechanism" (McClenny & Braga-Neto, 2020) - arxiv:2009.04544
+
+            Fixed weights (mode='none') are returned as-is.
         """
-        # Fixed weights: no processing needed
-        if self.mode == 'none':
-            return self.weights
-
-        # Update EMA during training only (not during validation)
-        if self.training:
-            with torch.no_grad():
-                self.weights_ema = (
-                    self.ema_beta * self.weights_ema +
-                    (1 - self.ema_beta) * self.weights
-                )
-
-        # Mean-one normalization on smoothed weights
-        # Add small epsilon for numerical stability
-        w_normalized = self.weights_ema / (self.weights_ema.mean() + 1e-8)
-        return w_normalized
+        return self.weights
 
     def get_statistics(self) -> dict:
         """
@@ -226,19 +233,19 @@ class SelfAdaptiveBSPLoss(nn.Module):
 
     def __init__(
         self,
-        n_bins: int = 32,
-        lambda_sa: float = 1.0,
+        n_bins: int = N_BINS_DEFAULT,
+        lambda_sa: float = MU_DEFAULT,
         adapt_mode: str = 'per-bin',
-        init_weight: float = 1.0,
-        epsilon: float = 1e-8,
-        binning_mode: str = 'linear',
-        signal_length: int = 4000,
+        init_weight: float = INIT_WEIGHT_DEFAULT,
+        epsilon: float = EPSILON_DEFAULT,
+        binning_mode: str = BINNING_MODE_DEFAULT,
+        signal_length: int = SIGNAL_LENGTH_CDON,
         cache_path: str = None,
-        lambda_k_mode: str = 'k_squared',
-        use_log: bool = False,
-        use_output_norm: bool = True,
-        use_minmax_norm: bool = True,
-        loss_type: str = 'mspe'
+        lambda_k_mode: str = LAMBDA_K_MODE_DEFAULT,
+        use_log: bool = USE_LOG_DEFAULT,
+        use_output_norm: bool = USE_OUTPUT_NORM_DEFAULT,
+        use_minmax_norm: bool = USE_MINMAX_NORM_DEFAULT,
+        loss_type: str = LOSS_TYPE_BSP_DEFAULT
     ):
         """
         Initialize Self-Adaptive BSP Loss.

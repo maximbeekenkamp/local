@@ -80,7 +80,10 @@ class SOAP(optim.Optimizer):
         """
         Merges dimensions of the gradient tensor till the product of the dimensions is less than or equal to max_precond_dim.
         """
-        assert self._data_format in ["channels_first", "channels_last"]
+        if self._data_format not in ["channels_first", "channels_last"]:
+            raise ValueError(
+                f"data_format must be 'channels_first' or 'channels_last', got {self._data_format}"
+            )
         if self._data_format == "channels_last" and grad.dim() == 4:
             grad = grad.permute(0, 3, 1, 2)
         shape = grad.shape

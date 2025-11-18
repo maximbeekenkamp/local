@@ -148,7 +148,7 @@ def train_baseline(
 
     # Create dual dataloaders
     console.print("\n[bold cyan]Loading data (dual-batch)...[/bold cyan]")
-    per_ts_train, per_ts_val, seq_train, seq_val = create_dual_dataloaders(
+    per_timestep_train, per_timestep_val, sequence_train, sequence_val = create_dual_dataloaders(
         data_dir=data_dir,
         arch=arch,  # Pass architecture to determine causality
         batch_size_per_timestep=config.batch_size,
@@ -156,10 +156,10 @@ def train_baseline(
         num_workers=config.num_workers,
         use_dummy=use_dummy
     )
-    console.print(f"✓ Per-timestep train samples: {len(per_ts_train.dataset):,}")
-    console.print(f"✓ Per-timestep val samples: {len(per_ts_val.dataset):,}")
-    console.print(f"✓ Sequence train samples: {len(seq_train.dataset)}")
-    console.print(f"✓ Sequence val samples: {len(seq_val.dataset)}")
+    console.print(f"✓ Per-timestep train samples: {len(per_timestep_train.dataset):,}")
+    console.print(f"✓ Per-timestep val samples: {len(per_timestep_val.dataset):,}")
+    console.print(f"✓ Sequence train samples: {len(sequence_train.dataset)}")
+    console.print(f"✓ Sequence val samples: {len(sequence_val.dataset)}")
 
     # Create model
     console.print(f"\n[bold cyan]Creating {arch} model...[/bold cyan]")
@@ -186,10 +186,10 @@ def train_baseline(
         # DeepONet: use both per-timestep and sequence loaders
         trainer = SimpleTrainer(
             model=model,
-            per_timestep_train_loader=per_ts_train,
-            sequence_train_loader=seq_train,
-            per_timestep_val_loader=per_ts_val,
-            sequence_val_loader=seq_val,
+            per_timestep_train_loader=per_timestep_train,
+            sequence_train_loader=sequence_train,
+            per_timestep_val_loader=per_timestep_val,
+            sequence_val_loader=sequence_val,
             config=config,
             loss_config=loss_config,
             experiment_name=experiment_name

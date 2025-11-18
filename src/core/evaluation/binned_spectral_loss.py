@@ -40,6 +40,19 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, Optional
 
+from .constants import (
+    EPSILON_DEFAULT,
+    N_BINS_DEFAULT,
+    SIGNAL_LENGTH_CDON,
+    MU_DEFAULT,
+    BINNING_MODE_DEFAULT,
+    LAMBDA_K_MODE_DEFAULT,
+    LOSS_TYPE_BSP_DEFAULT,
+    USE_OUTPUT_NORM_DEFAULT,
+    USE_MINMAX_NORM_DEFAULT,
+    USE_LOG_DEFAULT
+)
+
 
 class BinnedSpectralLoss(nn.Module):
     """
@@ -65,18 +78,18 @@ class BinnedSpectralLoss(nn.Module):
 
     def __init__(
         self,
-        n_bins: int = 32,
-        mu: float = 1.0,
-        epsilon: float = 1e-8,
-        binning_mode: str = 'linear',
-        signal_length: int = 4000,
+        n_bins: int = N_BINS_DEFAULT,
+        mu: float = MU_DEFAULT,
+        epsilon: float = EPSILON_DEFAULT,
+        binning_mode: str = BINNING_MODE_DEFAULT,
+        signal_length: int = SIGNAL_LENGTH_CDON,
         cache_path: str = None,
-        target_cache_path: str = None,  # NEW parameter for target spectra cache
-        lambda_k_mode: str = 'k_squared',
-        use_log: bool = False,
-        use_output_norm: bool = True,
-        use_minmax_norm: bool = True,
-        loss_type: str = 'mspe'
+        target_cache_path: str = None,
+        lambda_k_mode: str = LAMBDA_K_MODE_DEFAULT,
+        use_log: bool = USE_LOG_DEFAULT,
+        use_output_norm: bool = USE_OUTPUT_NORM_DEFAULT,
+        use_minmax_norm: bool = USE_MINMAX_NORM_DEFAULT,
+        loss_type: str = LOSS_TYPE_BSP_DEFAULT
     ):
         """
         Initialize Binned Spectral Loss.
@@ -91,6 +104,10 @@ class BinnedSpectralLoss(nn.Module):
             cache_path: Optional path to precomputed spectrum cache (e.g., 'cache/true_spectrum.npz')
                        If provided, loads bin edges and downsamples to n_bins if needed
                        This ensures all BSP instances use identical bin edges derived from real data
+            target_cache_path: Optional path to precomputed target spectra (e.g., 'cache/target_spectra_log.npz')
+                              Caches preprocessed target spectra for faster training
+                              IMPORTANT: Only works with SEQUENCE data (full trajectories), NOT per-timestep data
+                              Cache is per-sample (one spectrum per trajectory), requires sample_indices for lookup
             lambda_k_mode: Per-bin weight mode (λ_k from paper Algorithm 1):
                 - 'k_squared': λ_k = k² (paper Table 4, turbulence - default)
                 - 'uniform': λ_k = 1 (paper Table 4, airfoil / log BSP)
@@ -109,6 +126,17 @@ class BinnedSpectralLoss(nn.Module):
             ValueError: If loss_type is not 'mspe' or 'l2_norm'
         """
         super().__init__()
+
+        # Input validation
+        if n_bins <= 0:
+            raise ValueError(f"n_bins must be positive, got {n_bins}")
+        if mu < 0:
+            raise ValueError(f"mu must be non-negative, got {mu}")
+        if epsilon <= 0:
+            raise ValueError(f"epsilon must be positive, got {epsilon}")
+        if signal_length <= 0:
+            raise ValueError(f"signal_length must be positive, got {signal_length}")
+
         self.n_bins = n_bins
         self.mu = mu
         self.epsilon = epsilon
@@ -163,8 +191,6 @@ class BinnedSpectralLoss(nn.Module):
             # Use bin centers as frequency values
             bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
             lambda_k = bin_centers ** 2
-            # Normalize to preserve total weight: sum(λ_k) = n_bins
-            lambda_k = lambda_k / lambda_k.sum() * n_bins
         elif lambda_k_mode == 'uniform':
             # λ_k = 1 (paper Table 4, airfoil case)
             lambda_k = torch.ones(n_bins, dtype=torch.float32)
@@ -216,6 +242,18 @@ class BinnedSpectralLoss(nn.Module):
                 f"Cache file {cache_path} does not contain 'bin_edges'.\n"
                 f"Re-run scripts/precompute_spectrum.py to regenerate with bin edges."
             )
+
+        # Validate binning_mode matches (if metadata available)
+        if 'binning_mode' in cached:
+            cached_binning_mode = str(cached['binning_mode'])
+            if cached_binning_mode != binning_mode:
+                raise ValueError(
+                    f"Cache binning_mode mismatch!\n"
+                    f"  Requested: {binning_mode}\n"
+                    f"  Cached: {cached_binning_mode}\n"
+                    f"Re-run scripts/precompute_spectrum.py with correct binning_mode or "
+                    f"use binning_mode='{cached_binning_mode}' in loss config."
+                )
 
         cached_bin_edges = cached['bin_edges']  # [n_bins_cached + 1]
         cached_n_bins = len(cached_bin_edges) - 1
@@ -269,14 +307,70 @@ class BinnedSpectralLoss(nn.Module):
             ValueError: If cache config doesn't match current loss config
         """
         import numpy as np
+        from pathlib import Path
+
+        cache_file = Path(cache_path)
+        if not cache_file.exists():
+            raise FileNotFoundError(
+                f"Target cache file not found: {cache_path}\n"
+                f"Run scripts/precompute_spectrum.py to generate target caches."
+            )
 
         cached = np.load(cache_path)
 
         # Validate cache matches current config
-        assert cached['n_bins'] == self.n_bins, \
-            f"Cache n_bins={cached['n_bins']} != config n_bins={self.n_bins}"
-        assert cached['use_log'] == self.use_log, \
-            f"Cache use_log={cached['use_log']} != config use_log={self.use_log}"
+        cached_n_bins = int(cached['n_bins'])
+        cached_use_log = bool(cached['use_log'])
+
+        if cached_n_bins != self.n_bins:
+            raise ValueError(
+                f"Target cache n_bins mismatch!\n"
+                f"  Requested: {self.n_bins}\n"
+                f"  Cached: {cached_n_bins}\n"
+                f"Re-run scripts/precompute_spectrum.py or use n_bins={cached_n_bins}"
+            )
+
+        if cached_use_log != self.use_log:
+            cache_type = 'log' if cached_use_log else 'linear'
+            expected_type = 'log' if self.use_log else 'linear'
+            raise ValueError(
+                f"Target cache use_log mismatch!\n"
+                f"  Requested: use_log={self.use_log} ({expected_type})\n"
+                f"  Cached: use_log={cached_use_log} ({cache_type})\n"
+                f"Use the correct cache file:\n"
+                f"  - Linear: cache/target_spectra_linear.npz\n"
+                f"  - Log: cache/target_spectra_log.npz"
+            )
+
+        # Validate normalization settings (added per user feedback)
+        cached_use_output_norm = bool(cached.get('use_output_norm', True))
+        cached_use_minmax_norm = bool(cached.get('use_minmax_norm', True))
+        cached_loss_type = str(cached.get('loss_type', 'mspe'))
+
+        if cached_use_output_norm != self.use_output_norm:
+            raise ValueError(
+                f"Target cache use_output_norm mismatch!\n"
+                f"  Requested: {self.use_output_norm}\n"
+                f"  Cached: {cached_use_output_norm}\n"
+                f"Re-run scripts/precompute_spectrum.py with matching normalization settings."
+            )
+
+        if cached_use_minmax_norm != self.use_minmax_norm:
+            raise ValueError(
+                f"Target cache use_minmax_norm mismatch!\n"
+                f"  Requested: {self.use_minmax_norm}\n"
+                f"  Cached: {cached_use_minmax_norm}\n"
+                f"Re-run scripts/precompute_spectrum.py with matching normalization settings.\n"
+                f"Note: use_minmax_norm=True optimizes SHAPE, False optimizes absolute ENERGY."
+            )
+
+        if cached_loss_type != self.loss_type:
+            raise ValueError(
+                f"Target cache loss_type mismatch!\n"
+                f"  Requested: {self.loss_type}\n"
+                f"  Cached: {cached_loss_type}\n"
+                f"Re-run scripts/precompute_spectrum.py with matching loss_type."
+            )
 
         # Convert to tensor and register as buffer (moves with model to device)
         target_binned = torch.from_numpy(cached['target_binned']).float()  # [N, C, n_bins]
@@ -320,9 +414,9 @@ class BinnedSpectralLoss(nn.Module):
 
         # Step 6: Min-max normalization (optional)
         if self.use_minmax_norm:
-            temp_min = target_binned.min(dim=-1, keepdim=True).values
-            temp_max = target_binned.max(dim=-1, keepdim=True).values
-            target_binned = (target_binned - temp_min) / (temp_max - temp_min + eps)
+            target_min = target_binned.min(dim=-1, keepdim=True).values
+            target_max = target_binned.max(dim=-1, keepdim=True).values
+            target_binned = (target_binned - target_min) / (target_max - target_min + eps)
 
         return target_binned
 
@@ -412,14 +506,14 @@ class BinnedSpectralLoss(nn.Module):
         if self.use_minmax_norm:
             # Compute min/max from target spectrum for each sample independently
             # Shape: [B, C, n_bins] → [B, C, 1] for min/max
-            temp_min = target_binned.min(dim=-1, keepdim=True).values
-            temp_max = target_binned.max(dim=-1, keepdim=True).values
+            target_min = target_binned.min(dim=-1, keepdim=True).values
+            target_max = target_binned.max(dim=-1, keepdim=True).values
 
             # Normalize both using target's range
             # Formula: (E - min) / (max - min + eps)
-            range_val = temp_max - temp_min + self.epsilon
-            target_binned = (target_binned - temp_min) / range_val
-            pred_binned = (pred_binned - temp_min) / range_val
+            range_val = target_max - target_min + self.epsilon
+            target_binned = (target_binned - target_min) / range_val
+            pred_binned = (pred_binned - target_min) / range_val
 
         # Step 5: Compute loss (either MSPE or L2 norm)
         if self.loss_type == 'mspe':
@@ -601,11 +695,11 @@ class BinnedSpectralLoss(nn.Module):
 
         # Per-sample min-max normalization (matching forward() method)
         if self.use_minmax_norm:
-            temp_min = target_binned.min(dim=-1, keepdim=True).values
-            temp_max = target_binned.max(dim=-1, keepdim=True).values
-            range_val = temp_max - temp_min + self.epsilon
-            target_binned = (target_binned - temp_min) / range_val
-            pred_binned = (pred_binned - temp_min) / range_val
+            target_min = target_binned.min(dim=-1, keepdim=True).values
+            target_max = target_binned.max(dim=-1, keepdim=True).values
+            range_val = target_max - target_min + self.epsilon
+            target_binned = (target_binned - target_min) / range_val
+            pred_binned = (pred_binned - target_min) / range_val
 
         # Compute per-bin errors (matching forward() method logic)
         if self.use_log:
