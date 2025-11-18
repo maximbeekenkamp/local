@@ -237,11 +237,12 @@ val_dataset = CDONDataset(
 
 # Create dataloaders with optimized batch sizes
 # Colab memory constraint: Keep total RAM usage < 10GB
-# BSP loss does FFT on full sequences - very memory intensive!
+# BSP loss does FFT on PREDICTIONS (target FFT is cached)
+# With 567K param model, even batch=4 sequences can OOM
 # Per-timestep: [batch, 1, 4000] inputs + activations
-# Sequence: [batch, 1, 4000] inputs/targets + FFT buffers
+# Sequence: [batch, 1, 4000] predictions need FFT + binning
 BATCH_SIZE_PER_TIMESTEP = 32   # For MSE on per-timestep data (Colab-safe)
-BATCH_SIZE_SEQUENCE = 4        # For BSP on sequences (FFT memory-safe)
+BATCH_SIZE_SEQUENCE = 2        # For BSP on sequences (ultra-conservative for 567K model)
 
 train_loader = DataLoader(
     train_dataset,
@@ -877,6 +878,10 @@ Train the same model architecture with all 6 loss functions sequentially:
 loss_types_to_train = ['baseline', 'bsp', 'log-bsp', 'sa-bsp-perbin', 'sa-bsp-global', 'sa-bsp-combined']
 
 for LOSS_TYPE in loss_types_to_train:
+    # Clear GPU cache before each training run to prevent OOM
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     print(f"\\n{'='*70}")
     print(f"Training {MODEL_ARCH.upper()} with {LOSS_TYPE.upper()} Loss")
     print(f"{'='*70}\\n")
