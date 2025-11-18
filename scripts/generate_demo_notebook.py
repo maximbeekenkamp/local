@@ -249,7 +249,7 @@ train_loader = DataLoader(
     batch_size=BATCH_SIZE_SEQUENCE,  # Sequence data uses smaller batch
     shuffle=True,
     num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
-    pin_memory=True
+    pin_memory=False  # Disable for Colab compatibility
 )
 
 val_loader = DataLoader(
@@ -257,7 +257,7 @@ val_loader = DataLoader(
     batch_size=BATCH_SIZE_SEQUENCE,  # Sequence data uses smaller batch
     shuffle=False,
     num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
-    pin_memory=True
+    pin_memory=False  # Disable for Colab compatibility
 )
 
 print(f"\\n✓ Data loaded successfully")
@@ -955,14 +955,14 @@ for LOSS_TYPE in loss_types_to_train:
             batch_size=BATCH_SIZE_PER_TIMESTEP,  # Large batch for per-timestep
             shuffle=True,
             num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
-            pin_memory=True
+            pin_memory=False  # Disable for Colab compatibility
         )
         per_ts_val_loader = DataLoader(
             per_ts_val_dataset,
             batch_size=BATCH_SIZE_PER_TIMESTEP,  # Large batch for per-timestep
             shuffle=False,
             num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
-            pin_memory=True
+            pin_memory=False  # Disable for Colab compatibility
         )
 
         # Create sequence loaders
@@ -971,14 +971,14 @@ for LOSS_TYPE in loss_types_to_train:
             batch_size=BATCH_SIZE_SEQUENCE,  # Smaller batch for sequences
             shuffle=True,
             num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
-            pin_memory=True
+            pin_memory=False  # Disable for Colab compatibility
         )
         seq_val_loader = DataLoader(
             seq_val_dataset,
             batch_size=BATCH_SIZE_SEQUENCE,  # Smaller batch for sequences
             shuffle=False,
             num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
-            pin_memory=True
+            pin_memory=False  # Disable for Colab compatibility
         )
 
         print(f"  ✓ Per-timestep train: {len(per_ts_train_dataset):,} samples")
@@ -1034,14 +1034,14 @@ for LOSS_TYPE in loss_types_to_train:
             batch_size=BATCH_SIZE_PER_TIMESTEP,  # Large batch for per-timestep
             shuffle=True,
             num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
-            pin_memory=True
+            pin_memory=False  # Disable for Colab compatibility
         )
         per_ts_val_loader = DataLoader(
             per_ts_val_dataset,
             batch_size=BATCH_SIZE_PER_TIMESTEP,  # Large batch for per-timestep
             shuffle=False,
             num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
-            pin_memory=True
+            pin_memory=False  # Disable for Colab compatibility
         )
 
         # Create sequence loaders
@@ -1050,14 +1050,14 @@ for LOSS_TYPE in loss_types_to_train:
             batch_size=BATCH_SIZE_SEQUENCE,  # Smaller batch for sequences
             shuffle=True,
             num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
-            pin_memory=True
+            pin_memory=False  # Disable for Colab compatibility
         )
         seq_val_loader = DataLoader(
             seq_val_dataset,
             batch_size=BATCH_SIZE_SEQUENCE,  # Smaller batch for sequences
             shuffle=False,
             num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
-            pin_memory=True
+            pin_memory=False  # Disable for Colab compatibility
         )
 
         print(f"  ✓ Per-timestep train: {len(per_ts_train_dataset):,} samples")
@@ -1091,14 +1091,14 @@ for LOSS_TYPE in loss_types_to_train:
             batch_size=BATCH_SIZE_SEQUENCE,  # Sequence batch size
             shuffle=True,
             num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
-            pin_memory=True
+            pin_memory=False  # Disable for Colab compatibility
         )
         seq_val_loader = DataLoader(
             seq_val_dataset,
             batch_size=BATCH_SIZE_SEQUENCE,  # Sequence batch size
             shuffle=False,
             num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
-            pin_memory=True
+            pin_memory=False  # Disable for Colab compatibility
         )
 
         print(f"  ✓ Sequence train: {len(seq_train_dataset)} samples")
