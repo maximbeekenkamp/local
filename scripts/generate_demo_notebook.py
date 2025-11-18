@@ -1125,7 +1125,7 @@ for LOSS_TYPE in loss_types_to_train:
         save_best=False,
         save_latest=False,
         device='cuda' if torch.cuda.is_available() else 'cpu',
-        num_workers=2,
+        num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
         verbose=True
     )
 
