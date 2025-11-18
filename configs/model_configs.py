@@ -14,9 +14,9 @@ import os
 @dataclass
 class DeepONetConfig:
     """
-    Configuration for DeepONet1D model.
+    Configuration for DeepONet1D model (matches reference CausalityDeepONet).
 
-    Target parameter count: ~235K
+    Target parameter count: ~567K
 
     Attributes:
         sensor_dim: Input dimension (number of timesteps)
@@ -28,9 +28,9 @@ class DeepONetConfig:
     """
 
     sensor_dim: int = 4000
-    latent_dim: int = 100
-    branch_layers: List[int] = field(default_factory=lambda: [50, 100])
-    trunk_layers: List[int] = field(default_factory=lambda: [100, 100])
+    latent_dim: int = 120  # Reference: 120 (matches CausalityDeepONet)
+    branch_layers: List[int] = field(default_factory=lambda: [120, 120, 120])  # Reference: 3 layers of 120
+    trunk_layers: List[int] = field(default_factory=lambda: [120, 120, 120])   # Reference: 3 layers of 120
     activation: str = 'requ'  # Reference default: ReQU (ReLU squared)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -97,7 +97,7 @@ class FNOConfig:
     """
     Configuration for FNO1D model.
 
-    Target parameter count: ~250K
+    Target parameter count: ~500K (matched to DeepONet)
 
     Attributes:
         n_modes: Number of Fourier modes to keep (low-frequency)
@@ -107,8 +107,8 @@ class FNOConfig:
         out_channels: Number of output channels
     """
 
-    n_modes: int = 28
-    hidden_channels: int = 60
+    n_modes: int = 32
+    hidden_channels: int = 80  # Increased from 60 to match ~500K params
     n_layers: int = 4
     in_channels: int = 1
     out_channels: int = 1
@@ -177,7 +177,7 @@ class UNetConfig:
     """
     Configuration for UNet1D model.
 
-    Target parameter count: ~250K
+    Target parameter count: ~500K (matched to DeepONet)
 
     Attributes:
         in_channels: Number of input channels
@@ -190,7 +190,7 @@ class UNetConfig:
 
     in_channels: int = 1
     out_channels: int = 1
-    base_channels: int = 40
+    base_channels: int = 58  # Increased from 40 to match ~500K params
     num_levels: int = 3
     kernel_size: int = 3
     num_groups: int = 4

@@ -236,10 +236,12 @@ val_dataset = CDONDataset(
 )
 
 # Create dataloaders with optimized batch sizes
-# Per-timestep: Large batch (320K samples) for GPU efficiency
-# Sequence: Smaller batch (80 samples) to fit memory
-BATCH_SIZE_PER_TIMESTEP = 512  # For MSE on per-timestep data
-BATCH_SIZE_SEQUENCE = 16        # For BSP on sequences
+# Colab memory constraint: Keep total RAM usage < 10GB
+# With ~500K param models, need conservative batches
+# Per-timestep: [batch, 1, 4000] inputs + activations
+# Sequence: [batch, 1, 4000] inputs/targets + FFT for BSP
+BATCH_SIZE_PER_TIMESTEP = 32   # For MSE on per-timestep data (Colab-safe)
+BATCH_SIZE_SEQUENCE = 8        # For BSP on sequences (Colab-safe)
 
 train_loader = DataLoader(
     train_dataset,
