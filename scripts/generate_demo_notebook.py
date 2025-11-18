@@ -113,19 +113,44 @@ except:
 repo_path = Path('/content/local')
 if not repo_path.exists():
     print("📥 Cloning repository...")
-    !git clone https://github.com/maximbeekenkamp/local.git
-    print("✅ Repository cloned")
+    clone_result = os.system('git clone https://github.com/maximbeekenkamp/local.git 2>&1')
+
+    # Verify clone succeeded
+    if clone_result != 0 or not repo_path.exists():
+        print("\\n❌ ERROR: Repository clone failed!")
+        print("\\n🔧 TROUBLESHOOTING:")
+        print("  1. GitHub may be experiencing server issues (500 error)")
+        print("  2. Wait a few minutes and re-run this cell")
+        print("  3. Check repository status: https://github.com/maximbeekenkamp/local")
+        print("\\n  Alternative: Upload code directly to Colab:")
+        print("     - Mount Google Drive:")
+        print("       from google.colab import drive")
+        print("       drive.mount('/content/drive')")
+        print("     - Copy your CMAME folder to Drive")
+        print("     - Change os.chdir() to your Drive path")
+        raise RuntimeError("Repository clone failed - see troubleshooting steps above")
+
+    print("✅ Repository cloned successfully")
 else:
     print("📥 Updating repository...")
     !git -C /content/local pull
     print("✅ Repository updated")
 
-# Change to repo directory
-try:
-    os.chdir('/content/local')
-    print(f"✅ Changed to: {os.getcwd()}")
-except:
-    pass
+# Change to repo directory with verification
+if not repo_path.exists():
+    print("\\n❌ ERROR: /content/local directory not found!")
+    print("   The repository clone likely failed. See error above.")
+    raise RuntimeError("Repository directory missing")
+
+os.chdir('/content/local')
+print(f"✅ Changed to: {os.getcwd()}")
+
+# Verify requirements.txt exists
+if not os.path.exists('requirements.txt'):
+    print("\\n❌ ERROR: requirements.txt not found!")
+    print(f"   Current directory: {os.getcwd()}")
+    print(f"   Directory contents: {list(Path('.').iterdir())[:10]}")
+    raise RuntimeError("requirements.txt missing - repository may be incomplete")
 
 # Install dependencies
 print("\\n📦 Installing dependencies...")
