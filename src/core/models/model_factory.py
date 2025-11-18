@@ -12,6 +12,7 @@ from typing import Optional, Dict, Any
 from .deeponet_1d import DeepONet1D
 from .fno_1d import FNO1D
 from .unet_1d import UNet1D
+from configs.model_configs import DeepONetConfig, FNOConfig, UNetConfig
 
 
 def create_model(arch: str, config: Optional[Dict[str, Any]] = None) -> nn.Module:
@@ -63,21 +64,22 @@ def _create_deeponet(config: Dict[str, Any]) -> DeepONet1D:
     Args:
         config: Configuration dictionary. Supported keys:
                 - sensor_dim: Input dimension (default 4000)
-                - latent_dim: Latent space dimension (default 100)
-                - branch_layers: Branch network hidden layers (default [50, 100])
-                - trunk_layers: Trunk network hidden layers (default [100, 100])
-                - activation: Activation function ('tanh', 'relu', 'siren', default 'siren')
+                - latent_dim: Latent space dimension (default 120, matches reference)
+                - branch_layers: Branch network hidden layers (default [120, 120, 120])
+                - trunk_layers: Trunk network hidden layers (default [120, 120, 120])
+                - activation: Activation function ('requ', 'tanh', 'relu', 'siren', default 'requ')
 
     Returns:
         Initialized DeepONet1D model
     """
-    # Default hyperparameters (target ~235K params)
+    # Use defaults from DeepONetConfig (matches reference CausalityDeepONet ~567K params)
+    default_config = DeepONetConfig()
     defaults = {
-        'sensor_dim': 4000,
-        'latent_dim': 100,
-        'branch_layers': [50, 100],
-        'trunk_layers': [100, 100],
-        'activation': 'siren'  # Default to SIREN activation
+        'sensor_dim': default_config.sensor_dim,
+        'latent_dim': default_config.latent_dim,
+        'branch_layers': default_config.branch_layers,
+        'trunk_layers': default_config.trunk_layers,
+        'activation': default_config.activation
     }
 
     # Merge with user config
@@ -92,8 +94,8 @@ def _create_fno(config: Dict[str, Any]) -> FNO1D:
 
     Args:
         config: Configuration dictionary. Supported keys:
-                - n_modes: Number of Fourier modes (default 28)
-                - hidden_channels: Hidden channel dimension (default 60)
+                - n_modes: Number of Fourier modes (default 32)
+                - hidden_channels: Hidden channel dimension (default 80)
                 - n_layers: Number of FNO layers (default 4)
                 - in_channels: Input channels (default 1)
                 - out_channels: Output channels (default 1)
@@ -101,13 +103,14 @@ def _create_fno(config: Dict[str, Any]) -> FNO1D:
     Returns:
         Initialized FNO1D model for sequence-to-sequence prediction
     """
-    # Default hyperparameters (target ~250K params)
+    # Use defaults from FNOConfig (~500K params, matched to DeepONet)
+    default_config = FNOConfig()
     defaults = {
-        'n_modes': 28,
-        'hidden_channels': 60,
-        'n_layers': 4,
-        'in_channels': 1,
-        'out_channels': 1
+        'n_modes': default_config.n_modes,
+        'hidden_channels': default_config.hidden_channels,
+        'n_layers': default_config.n_layers,
+        'in_channels': default_config.in_channels,
+        'out_channels': default_config.out_channels
     }
 
     # Merge with user config
@@ -124,7 +127,7 @@ def _create_unet(config: Dict[str, Any]) -> UNet1D:
         config: Configuration dictionary. Supported keys:
                 - in_channels: Input channels (default 1)
                 - out_channels: Output channels (default 1)
-                - base_channels: Base channel count (default 40)
+                - base_channels: Base channel count (default 58)
                 - num_levels: Encoder/decoder depth (default 3)
                 - kernel_size: Convolution kernel size (default 3)
                 - num_groups: GroupNorm groups (default 4)
@@ -132,14 +135,15 @@ def _create_unet(config: Dict[str, Any]) -> UNet1D:
     Returns:
         Initialized UNet1D model for sequence-to-sequence prediction
     """
-    # Default hyperparameters (target ~250K params)
+    # Use defaults from UNetConfig (~500K params, matched to DeepONet)
+    default_config = UNetConfig()
     defaults = {
-        'in_channels': 1,
-        'out_channels': 1,
-        'base_channels': 40,
-        'num_levels': 3,
-        'kernel_size': 3,
-        'num_groups': 4
+        'in_channels': default_config.in_channels,
+        'out_channels': default_config.out_channels,
+        'base_channels': default_config.base_channels,
+        'num_levels': default_config.num_levels,
+        'kernel_size': default_config.kernel_size,
+        'num_groups': default_config.num_groups
     }
 
     # Merge with user config
