@@ -248,7 +248,7 @@ train_loader = DataLoader(
     train_dataset,
     batch_size=BATCH_SIZE_SEQUENCE,  # Sequence data uses smaller batch
     shuffle=True,
-    num_workers=2,
+    num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
     pin_memory=True
 )
 
@@ -256,7 +256,7 @@ val_loader = DataLoader(
     val_dataset,
     batch_size=BATCH_SIZE_SEQUENCE,  # Sequence data uses smaller batch
     shuffle=False,
-    num_workers=2,
+    num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
     pin_memory=True
 )
 
@@ -954,14 +954,14 @@ for LOSS_TYPE in loss_types_to_train:
             per_ts_train_dataset,
             batch_size=BATCH_SIZE_PER_TIMESTEP,  # Large batch for per-timestep
             shuffle=True,
-            num_workers=2,
+            num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
             pin_memory=True
         )
         per_ts_val_loader = DataLoader(
             per_ts_val_dataset,
             batch_size=BATCH_SIZE_PER_TIMESTEP,  # Large batch for per-timestep
             shuffle=False,
-            num_workers=2,
+            num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
             pin_memory=True
         )
 
@@ -970,14 +970,14 @@ for LOSS_TYPE in loss_types_to_train:
             seq_train_dataset,
             batch_size=BATCH_SIZE_SEQUENCE,  # Smaller batch for sequences
             shuffle=True,
-            num_workers=2,
+            num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
             pin_memory=True
         )
         seq_val_loader = DataLoader(
             seq_val_dataset,
             batch_size=BATCH_SIZE_SEQUENCE,  # Smaller batch for sequences
             shuffle=False,
-            num_workers=2,
+            num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
             pin_memory=True
         )
 
@@ -1033,14 +1033,14 @@ for LOSS_TYPE in loss_types_to_train:
             per_ts_train_dataset,
             batch_size=BATCH_SIZE_PER_TIMESTEP,  # Large batch for per-timestep
             shuffle=True,
-            num_workers=2,
+            num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
             pin_memory=True
         )
         per_ts_val_loader = DataLoader(
             per_ts_val_dataset,
             batch_size=BATCH_SIZE_PER_TIMESTEP,  # Large batch for per-timestep
             shuffle=False,
-            num_workers=2,
+            num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
             pin_memory=True
         )
 
@@ -1049,14 +1049,14 @@ for LOSS_TYPE in loss_types_to_train:
             seq_train_dataset,
             batch_size=BATCH_SIZE_SEQUENCE,  # Smaller batch for sequences
             shuffle=True,
-            num_workers=2,
+            num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
             pin_memory=True
         )
         seq_val_loader = DataLoader(
             seq_val_dataset,
             batch_size=BATCH_SIZE_SEQUENCE,  # Smaller batch for sequences
             shuffle=False,
-            num_workers=2,
+            num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
             pin_memory=True
         )
 
@@ -1090,14 +1090,14 @@ for LOSS_TYPE in loss_types_to_train:
             seq_train_dataset,
             batch_size=BATCH_SIZE_SEQUENCE,  # Sequence batch size
             shuffle=True,
-            num_workers=2,
+            num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
             pin_memory=True
         )
         seq_val_loader = DataLoader(
             seq_val_dataset,
             batch_size=BATCH_SIZE_SEQUENCE,  # Sequence batch size
             shuffle=False,
-            num_workers=2,
+            num_workers=0,  # Use 0 for Colab to avoid RAM multiplication
             pin_memory=True
         )
 
