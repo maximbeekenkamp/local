@@ -89,9 +89,17 @@ class CombinedLoss(nn.Module):
         """
         # Import here to avoid circular dependency
         from .adaptive_spectral_loss import SelfAdaptiveBSPLoss
+        from .binned_spectral_loss import BinnedSpectralLoss
+        import torch.nn as nn
 
-        loss_base = self.base_loss(pred, target, sample_indices=sample_indices)
-        loss_spectral = self.spectral_loss(pred, target, sample_indices=sample_indices)
+        # Base loss (MSE) doesn't accept sample_indices
+        loss_base = self.base_loss(pred, target)
+
+        # Spectral loss (BSP/SA-BSP) accepts sample_indices
+        if isinstance(self.spectral_loss, (BinnedSpectralLoss, SelfAdaptiveBSPLoss)):
+            loss_spectral = self.spectral_loss(pred, target, sample_indices=sample_indices)
+        else:
+            loss_spectral = self.spectral_loss(pred, target)
 
         # Default weights (static)
         w_mse = 1.0
@@ -116,7 +124,8 @@ class CombinedLoss(nn.Module):
     def get_loss_components(
         self,
         pred: torch.Tensor,
-        target: torch.Tensor
+        target: torch.Tensor,
+        sample_indices: torch.Tensor = None
     ) -> Dict[str, torch.Tensor]:
         """
         Get individual loss components for logging.
@@ -124,15 +133,24 @@ class CombinedLoss(nn.Module):
         Args:
             pred: Predicted output [B, C, T]
             target: Ground truth [B, C, T]
+            sample_indices: Optional sample indices for target spectrum cache lookup
 
         Returns:
             Dictionary with 'base', 'spectral', and 'total' losses
         """
         # Import here to avoid circular dependency
         from .adaptive_spectral_loss import SelfAdaptiveBSPLoss
+        from .binned_spectral_loss import BinnedSpectralLoss
+        import torch.nn as nn
 
+        # Base loss (MSE) doesn't accept sample_indices
         loss_base = self.base_loss(pred, target)
-        loss_spectral = self.spectral_loss(pred, target)
+
+        # Spectral loss (BSP/SA-BSP) accepts sample_indices
+        if isinstance(self.spectral_loss, (BinnedSpectralLoss, SelfAdaptiveBSPLoss)):
+            loss_spectral = self.spectral_loss(pred, target, sample_indices=sample_indices)
+        else:
+            loss_spectral = self.spectral_loss(pred, target)
 
         # Default weights (static)
         w_mse = 1.0

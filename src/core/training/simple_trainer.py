@@ -515,8 +515,17 @@ class SimpleTrainer:
                 else:
                     seq_outputs = self.model(seq_inputs)  # [B, 1, 4000]
 
-                # Compute loss (pass sample indices for cache lookup)
-                loss = self.criterion(seq_outputs, seq_targets, sample_indices=sample_indices)
+                # Compute loss (pass sample indices for cache lookup if supported)
+                # For baseline MSE loss, don't pass sample_indices (PyTorch MSELoss doesn't accept it)
+                from ..evaluation.loss_factory import CombinedLoss
+                from ..evaluation.binned_spectral_loss import BinnedSpectralLoss
+                from ..evaluation.adaptive_spectral_loss import SelfAdaptiveBSPLoss
+
+                if isinstance(self.criterion, (CombinedLoss, BinnedSpectralLoss, SelfAdaptiveBSPLoss)):
+                    loss = self.criterion(seq_outputs, seq_targets, sample_indices=sample_indices)
+                else:
+                    # Baseline MSE or other simple losses that don't accept sample_indices
+                    loss = self.criterion(seq_outputs, seq_targets)
                 final_loss = loss.mean() if loss.ndim > 0 else loss
 
                 # Extract loss components if using CombinedLoss
@@ -670,8 +679,17 @@ class SimpleTrainer:
                 else:
                     seq_outputs = self.model(seq_inputs)  # [B, 1, 4000]
 
-                # Compute loss (pass sample indices for cache lookup)
-                loss = self.criterion(seq_outputs, seq_targets, sample_indices=sample_indices)
+                # Compute loss (pass sample indices for cache lookup if supported)
+                # For baseline MSE loss, don't pass sample_indices (PyTorch MSELoss doesn't accept it)
+                from ..evaluation.loss_factory import CombinedLoss
+                from ..evaluation.binned_spectral_loss import BinnedSpectralLoss
+                from ..evaluation.adaptive_spectral_loss import SelfAdaptiveBSPLoss
+
+                if isinstance(self.criterion, (CombinedLoss, BinnedSpectralLoss, SelfAdaptiveBSPLoss)):
+                    loss = self.criterion(seq_outputs, seq_targets, sample_indices=sample_indices)
+                else:
+                    # Baseline MSE or other simple losses that don't accept sample_indices
+                    loss = self.criterion(seq_outputs, seq_targets)
                 final_loss = loss.mean() if loss.ndim > 0 else loss
 
                 # Extract loss components if using CombinedLoss
