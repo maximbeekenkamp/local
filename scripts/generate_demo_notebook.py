@@ -854,9 +854,10 @@ print("  Run training cells below to see updated behavior")"""),
     # Cell 17: Code
     code_cell("""# Import loss configurations
 from configs.loss_config import (
-    BASELINE_CONFIG, 
+    BASELINE_CONFIG,
     BSP_CONFIG,
     LOG_BSP_CONFIG,
+    WEIRD_LOG_BSP_CONFIG,
     SA_BSP_PERBIN_CONFIG,
     SA_BSP_GLOBAL_CONFIG,
     SA_BSP_COMBINED_CONFIG
@@ -868,6 +869,7 @@ loss_config_map = {
     'baseline': BASELINE_CONFIG,
     'bsp': BSP_CONFIG,
     'log-bsp': LOG_BSP_CONFIG,
+    'weird-log-bsp': WEIRD_LOG_BSP_CONFIG,
     'sa-bsp-perbin': SA_BSP_PERBIN_CONFIG,
     'sa-bsp-global': SA_BSP_GLOBAL_CONFIG,
     'sa-bsp-combined': SA_BSP_COMBINED_CONFIG
@@ -879,28 +881,30 @@ all_trainers = {}
 trained_models = {}
 
 print("✓ Storage initialized for multi-loss training")
-print("\\nWill train with 6 loss types:")
+print("\\nWill train with 7 loss types:")
 print("  1. BASELINE:", BASELINE_CONFIG.description)
 print("  2. BSP:", BSP_CONFIG.description)
 print("  3. LOG-BSP:", LOG_BSP_CONFIG.description)
-print("  4. SA-BSP-PERBIN:", SA_BSP_PERBIN_CONFIG.description)
-print("  5. SA-BSP-GLOBAL:", SA_BSP_GLOBAL_CONFIG.description)
-print("  6. SA-BSP-COMBINED:", SA_BSP_COMBINED_CONFIG.description)"""),
+print("  4. WEIRD-LOG-BSP:", WEIRD_LOG_BSP_CONFIG.description)
+print("  5. SA-BSP-PERBIN:", SA_BSP_PERBIN_CONFIG.description)
+print("  6. SA-BSP-GLOBAL:", SA_BSP_GLOBAL_CONFIG.description)
+print("  7. SA-BSP-COMBINED:", SA_BSP_COMBINED_CONFIG.description)"""),
 
     # Cell 18: Markdown
     markdown_cell("""## Cell 5: Sequential Training with All Loss Types
 
-Train the same model architecture with all 6 loss functions sequentially:
+Train the same model architecture with all 7 loss functions sequentially:
 1. **BASELINE** - Pure MSE baseline
 2. **BSP** - Fixed spectral loss with k² weighting
-3. **Log-BSP** - Spectral loss with log₁₀ energies and uniform weighting
-4. **SA-BSP-PERBIN** - 32 adaptive weights (emphasize hard frequency bins)
-5. **SA-BSP-GLOBAL** - 2 adaptive weights (learn MSE/BSP balance)
-6. **SA-BSP-COMBINED** - 34 adaptive weights (full competitive dynamics)"""),
+3. **Log-BSP** - Spectral loss with log₁₀ energies (optimizes spectral SHAPE)
+4. **Weird-Log-BSP** - Log-BSP WITHOUT min-max norm (optimizes absolute ENERGY)
+5. **SA-BSP-PERBIN** - 32 adaptive weights (emphasize hard frequency bins)
+6. **SA-BSP-GLOBAL** - 2 adaptive weights (learn MSE/BSP balance)
+7. **SA-BSP-COMBINED** - 34 adaptive weights (full competitive dynamics)"""),
 
     # Cell 19: Code
-    code_cell("""# Train with all 6 loss types sequentially
-loss_types_to_train = ['baseline', 'bsp', 'log-bsp', 'sa-bsp-perbin', 'sa-bsp-global', 'sa-bsp-combined']
+    code_cell("""# Train with all 7 loss types sequentially
+loss_types_to_train = ['baseline', 'bsp', 'log-bsp', 'weird-log-bsp', 'sa-bsp-perbin', 'sa-bsp-global', 'sa-bsp-combined']
 
 for LOSS_TYPE in loss_types_to_train:
     # Clear GPU cache before each training run to prevent OOM
@@ -1216,110 +1220,207 @@ print(f"Trained {len(all_training_results)} models with different loss functions
     # Cell 20: Markdown
     markdown_cell("""## Cell 6: Multi-Loss Training Comparison
 
-Compare training metrics across all 6 loss functions."""),
+Compare training metrics across all 7 loss functions. Plots split for readability:
+- **Plot A**: Fixed loss variants (BASELINE, BSP, LOG-BSP, WEIRD-LOG-BSP)
+- **Plot B**: Self-adaptive variants (BASELINE, LOG-BSP, SA-BSP variants)"""),
 
-    # Cell 21: Code
-    code_cell("""# Create multi-loss comparison plots
+    # Cell 21: Code - Plot A: Fixed Loss Variants
+    code_cell("""# ============================================================================
+# PLOT A: Fixed Loss Variants (BASELINE, BSP, LOG-BSP, WEIRD-LOG-BSP)
+# ============================================================================
 fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-# Color scheme for loss types
-colors = {
-    'baseline': '#1f77b4',       # Blue
+# Color scheme for fixed loss variants
+colors_fixed = {
+    'baseline': '#1f77b4',        # Blue
     'bsp': '#ff7f0e',             # Orange
     'log-bsp': '#2ca02c',         # Green
-    'sa-bsp-perbin': '#d62728',   # Red
-    'sa-bsp-global': '#9467bd',   # Purple
-    'sa-bsp-combined': '#17becf'  # Cyan
+    'weird-log-bsp': '#8B4513'    # Brown
 }
-linestyles = {
-    'baseline': '-', 
-    'bsp': '--', 
-    'log-bsp': '-.', 
-    'sa-bsp-perbin': ':', 
-    'sa-bsp-global': '-',
-    'sa-bsp-combined': '--'
+linestyles_fixed = {
+    'baseline': '-',
+    'bsp': '--',
+    'log-bsp': '-.',
+    'weird-log-bsp': ':'
 }
-markers = {
-    'baseline': 'o', 
-    'bsp': 's', 
-    'log-bsp': '^', 
-    'sa-bsp-perbin': 'D', 
-    'sa-bsp-global': 'v',
-    'sa-bsp-combined': 'p'
+markers_fixed = {
+    'baseline': 'o',
+    'bsp': 's',
+    'log-bsp': '^',
+    'weird-log-bsp': 'D'
 }
 
-for loss_type in ['baseline', 'bsp', 'log-bsp', 'sa-bsp-perbin', 'sa-bsp-global', 'sa-bsp-combined']:
+fixed_variants = ['baseline', 'bsp', 'log-bsp', 'weird-log-bsp']
+label_map_fixed = {
+    'baseline': 'BASELINE',
+    'bsp': 'BSP',
+    'log-bsp': 'Log-BSP',
+    'weird-log-bsp': 'Weird-Log-BSP'
+}
+
+for loss_type in fixed_variants:
     key = f"{MODEL_ARCH}_{loss_type}"
     results = all_training_results[key]
-    
+
     # Extract metrics
     val_losses = [h['loss'] for h in results['val_history']]
     val_mses = [h['mse'] for h in results['val_history']]
     val_spectrum_errors = [h['spectrum_error'] for h in results['val_history']]
     epochs = range(1, len(val_losses) + 1)
 
-    # Create label with short name
-    label_map = {
-        'baseline': 'BASELINE',
-        'bsp': 'BSP',
-        'log-bsp': 'Log-BSP',
-        'sa-bsp-perbin': 'SA-BSP (Per-bin)',
-        'sa-bsp-global': 'SA-BSP (Global)',
-        'sa-bsp-combined': 'SA-BSP (Combined)'
-    }
-    label = label_map[loss_type]
+    label = label_map_fixed[loss_type]
 
     # Plot on all 3 axes
     axes[0].plot(epochs, val_losses, label=label,
-                color=colors[loss_type], linestyle=linestyles[loss_type],
-                linewidth=2, alpha=0.9, marker=markers[loss_type], markersize=4, markevery=5)
+                color=colors_fixed[loss_type], linestyle=linestyles_fixed[loss_type],
+                linewidth=2.5, alpha=0.9, marker=markers_fixed[loss_type], markersize=5, markevery=5)
 
     axes[1].plot(epochs, val_mses, label=label,
-                color=colors[loss_type], linestyle=linestyles[loss_type],
-                linewidth=2, alpha=0.9, marker=markers[loss_type], markersize=4, markevery=5)
-    
-    axes[2].plot(epochs, val_spectrum_errors, label=label,
-                color=colors[loss_type], linestyle=linestyles[loss_type],
-                linewidth=2, alpha=0.9, marker=markers[loss_type], markersize=4, markevery=5)
+                color=colors_fixed[loss_type], linestyle=linestyles_fixed[loss_type],
+                linewidth=2.5, alpha=0.9, marker=markers_fixed[loss_type], markersize=5, markevery=5)
 
-# Configure axes with LOG SCALE on y-axis
+    axes[2].plot(epochs, val_spectrum_errors, label=label,
+                color=colors_fixed[loss_type], linestyle=linestyles_fixed[loss_type],
+                linewidth=2.5, alpha=0.9, marker=markers_fixed[loss_type], markersize=5, markevery=5)
+
+# Configure axes
 axes[0].set_xlabel('Epoch', fontsize=12)
 axes[0].set_ylabel('Validation Loss', fontsize=12)
-axes[0].set_title('Validation Loss Comparison', fontsize=14, fontweight='bold')
-axes[0].set_yscale('log')  # LOG SCALE
-axes[0].set_ylim(bottom=1e-5, top=1.0)  # Clip for readability
-axes[0].legend(fontsize=9, loc='best')
+axes[0].set_title('Validation Loss', fontsize=14, fontweight='bold')
+axes[0].set_yscale('log')
+axes[0].set_ylim(bottom=1e-5, top=1.0)
+axes[0].legend(fontsize=10, loc='best')
 axes[0].grid(True, alpha=0.3, which='both')
 
 axes[1].set_xlabel('Epoch', fontsize=12)
 axes[1].set_ylabel('MSE', fontsize=12)
 axes[1].set_title('MSE (Real Space)', fontsize=14, fontweight='bold')
-axes[1].set_yscale('log')  # LOG SCALE
-axes[1].set_ylim(bottom=1e-5, top=1.0)  # Clip for readability
-axes[1].legend(fontsize=9, loc='best')
+axes[1].set_yscale('log')
+axes[1].set_ylim(bottom=1e-5, top=1.0)
+axes[1].legend(fontsize=10, loc='best')
 axes[1].grid(True, alpha=0.3, which='both')
 
 axes[2].set_xlabel('Epoch', fontsize=12)
 axes[2].set_ylabel('Spectrum Error', fontsize=12)
-axes[2].set_title('Spectrum Error (Frequency Space)', fontsize=14, fontweight='bold')
-axes[2].set_yscale('log')  # LOG SCALE
-axes[2].set_ylim(bottom=1e-5, top=1.0)  # Clip for readability
-axes[2].legend(fontsize=9, loc='best')
+axes[2].set_title('Spectrum Error', fontsize=14, fontweight='bold')
+axes[2].set_yscale('log')
+axes[2].set_ylim(bottom=1e-5, top=1.0)
+axes[2].legend(fontsize=10, loc='best')
 axes[2].grid(True, alpha=0.3, which='both')
 
-plt.suptitle(f'{MODEL_ARCH.upper()}: Loss Function Comparison (6 Variants)', 
+plt.suptitle(f'{MODEL_ARCH.upper()}: Fixed Loss Variants (4 Variants)',
              fontsize=16, fontweight='bold')
 plt.tight_layout()
 plt.show()
 
-# Print final metrics table
-print(f"\\n{'='*70}")
-print("Final Metrics Summary")
-print(f"{'='*70}")
-print(f"{'Loss Type':<25} {'Val Loss':<12} {'MSE':<15} {'Spectrum Error':<15}")
-print("-"*70)
+print("✓ Plot A complete: Fixed loss variants")"""),
 
-for loss_type in ['baseline', 'bsp', 'log-bsp', 'sa-bsp-perbin', 'sa-bsp-global', 'sa-bsp-combined']:
+    # Cell 22: Code - Plot B: Self-Adaptive Variants
+    code_cell("""# ============================================================================
+# PLOT B: Self-Adaptive Variants (BASELINE + LOG-BSP ref + SA-BSP variants)
+# ============================================================================
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+# Color scheme for adaptive variants
+colors_adaptive = {
+    'baseline': '#1f77b4',        # Blue (reference)
+    'log-bsp': '#2ca02c',         # Green (reference)
+    'sa-bsp-perbin': '#d62728',   # Red
+    'sa-bsp-global': '#9467bd',   # Purple
+    'sa-bsp-combined': '#17becf'  # Cyan
+}
+linestyles_adaptive = {
+    'baseline': '-',
+    'log-bsp': '--',
+    'sa-bsp-perbin': ':',
+    'sa-bsp-global': '-.',
+    'sa-bsp-combined': '-'
+}
+markers_adaptive = {
+    'baseline': 'o',
+    'log-bsp': '^',
+    'sa-bsp-perbin': 'D',
+    'sa-bsp-global': 'v',
+    'sa-bsp-combined': 'p'
+}
+
+adaptive_variants = ['baseline', 'log-bsp', 'sa-bsp-perbin', 'sa-bsp-global', 'sa-bsp-combined']
+label_map_adaptive = {
+    'baseline': 'BASELINE (ref)',
+    'log-bsp': 'Log-BSP (ref)',
+    'sa-bsp-perbin': 'SA-BSP Per-bin',
+    'sa-bsp-global': 'SA-BSP Global',
+    'sa-bsp-combined': 'SA-BSP Combined'
+}
+
+for loss_type in adaptive_variants:
+    key = f"{MODEL_ARCH}_{loss_type}"
+    results = all_training_results[key]
+
+    # Extract metrics
+    val_losses = [h['loss'] for h in results['val_history']]
+    val_mses = [h['mse'] for h in results['val_history']]
+    val_spectrum_errors = [h['spectrum_error'] for h in results['val_history']]
+    epochs = range(1, len(val_losses) + 1)
+
+    label = label_map_adaptive[loss_type]
+
+    # Plot on all 3 axes
+    axes[0].plot(epochs, val_losses, label=label,
+                color=colors_adaptive[loss_type], linestyle=linestyles_adaptive[loss_type],
+                linewidth=2.5, alpha=0.9, marker=markers_adaptive[loss_type], markersize=5, markevery=5)
+
+    axes[1].plot(epochs, val_mses, label=label,
+                color=colors_adaptive[loss_type], linestyle=linestyles_adaptive[loss_type],
+                linewidth=2.5, alpha=0.9, marker=markers_adaptive[loss_type], markersize=5, markevery=5)
+
+    axes[2].plot(epochs, val_spectrum_errors, label=label,
+                color=colors_adaptive[loss_type], linestyle=linestyles_adaptive[loss_type],
+                linewidth=2.5, alpha=0.9, marker=markers_adaptive[loss_type], markersize=5, markevery=5)
+
+# Configure axes
+axes[0].set_xlabel('Epoch', fontsize=12)
+axes[0].set_ylabel('Validation Loss', fontsize=12)
+axes[0].set_title('Validation Loss', fontsize=14, fontweight='bold')
+axes[0].set_yscale('log')
+axes[0].set_ylim(bottom=1e-5, top=1.0)
+axes[0].legend(fontsize=10, loc='best')
+axes[0].grid(True, alpha=0.3, which='both')
+
+axes[1].set_xlabel('Epoch', fontsize=12)
+axes[1].set_ylabel('MSE', fontsize=12)
+axes[1].set_title('MSE (Real Space)', fontsize=14, fontweight='bold')
+axes[1].set_yscale('log')
+axes[1].set_ylim(bottom=1e-5, top=1.0)
+axes[1].legend(fontsize=10, loc='best')
+axes[1].grid(True, alpha=0.3, which='both')
+
+axes[2].set_xlabel('Epoch', fontsize=12)
+axes[2].set_ylabel('Spectrum Error', fontsize=12)
+axes[2].set_title('Spectrum Error', fontsize=14, fontweight='bold')
+axes[2].set_yscale('log')
+axes[2].set_ylim(bottom=1e-5, top=1.0)
+axes[2].legend(fontsize=10, loc='best')
+axes[2].grid(True, alpha=0.3, which='both')
+
+plt.suptitle(f'{MODEL_ARCH.upper()}: Self-Adaptive Loss Variants (5 Variants)',
+             fontsize=16, fontweight='bold')
+plt.tight_layout()
+plt.show()
+
+print("✓ Plot B complete: Self-adaptive variants")"""),
+
+    # Cell 23: Code - Metrics Summary Table
+    code_cell("""# Print final metrics table for all 7 variants
+print(f"\\n{'='*80}")
+print("Final Metrics Summary (All 7 Variants)")
+print(f"{'='*80}")
+print(f"{'Loss Type':<25} {'Val Loss':<12} {'MSE':<15} {'Spectrum Error':<15}")
+print("-"*80)
+
+all_variants = ['baseline', 'bsp', 'log-bsp', 'weird-log-bsp', 'sa-bsp-perbin', 'sa-bsp-global', 'sa-bsp-combined']
+
+for loss_type in all_variants:
     key = f"{MODEL_ARCH}_{loss_type}"
     results = all_training_results[key]
     final_val = results['val_history'][-1]
@@ -1328,23 +1429,25 @@ for loss_type in ['baseline', 'bsp', 'log-bsp', 'sa-bsp-perbin', 'sa-bsp-global'
     print(f"{label:<25} {final_val['loss']:<12.6f} "
           f"{final_val['mse']:<15.6f} {final_val['spectrum_error']:<15.6f}")"""),
 
-    # Cell 22: Markdown
+    # Cell 24: Markdown
     markdown_cell("""## Cell 7: Spectral Bias Visualization (Energy Spectrum)
 
-Visualize E(k) vs wavenumber to identify spectral bias in trained models."""),
+Visualize E(k) vs wavenumber to identify spectral bias in trained models. Plots split for readability:
+- **Plot A**: Fixed loss variants (True, BASELINE, BSP, LOG-BSP, WEIRD-LOG-BSP)
+- **Plot B**: Self-adaptive variants (True, BASELINE, LOG-BSP, SA-BSP variants)"""),
 
-    # Cell 23: Code
+    # Cell 25: Code - Compute Spectra for All Models
     code_cell("""import torch.fft as fft
 from src.core.visualization.spectral_analysis import compute_unbinned_spectrum, compute_cached_true_spectrum
 from configs.visualization_config import SPECTRUM_CACHE_FILENAME, CACHE_DIR
 
 # Get validation batch for energy spectrum analysis
-print("Computing energy spectra for all trained models...")
+print("Computing energy spectra for all 7 trained models...")
 
 # Check if models have been trained
 if 'trained_models' not in globals() or len(trained_models) == 0:
     print("\\n⚠️  WARNING: No trained models found!")
-    print("   Please run Cell 12 (training) first before running this cell.")
+    print("   Please run Cell 5 (training) first before running this cell.")
     print("   This cell requires the 'trained_models' dictionary to be populated.\\n")
 else:
     print(f"✓ Found {len(trained_models)} trained models")
@@ -1380,194 +1483,271 @@ spectra['True'] = {
     'energy_p84': E_true_p84
 }
 
-for loss_type in ['baseline', 'bsp', 'log-bsp', 'sa-bsp-perbin', 'sa-bsp-global', 'sa-bsp-combined']:
+# Process all 7 variants
+all_variants = ['baseline', 'bsp', 'log-bsp', 'weird-log-bsp', 'sa-bsp-perbin', 'sa-bsp-global', 'sa-bsp-combined']
+
+for loss_type in all_variants:
     key = f"{MODEL_ARCH}_{loss_type}"
-    
+
     # Check if model exists
     if key not in trained_models:
         print(f"  ⚠️  Skipping {loss_type.upper()}: model key '{key}' not found in trained_models")
         continue
-    
+
     model_trained = trained_models[key]
     model_trained.eval()
     model_trained.to(device)
-    
+
     try:
         # Collect predictions from ALL validation batches for uncertainty bands
         all_preds = []
         print(f"  Processing {loss_type.upper()}...", end='')
-        
+
         with torch.no_grad():
             for val_input, _ in val_loader:
                 val_input = val_input.to(device)
                 pred = model_trained(val_input)
                 all_preds.append(pred.cpu())
-        
+
         # Stack all predictions: [total_val_samples, C, T]
         all_preds_tensor = torch.cat(all_preds, dim=0)
-        
+
         # Compute unbinned spectrum with percentile-based uncertainty bands
         k_pred, E_pred_median, E_pred_p16, E_pred_p84 = compute_unbinned_spectrum(all_preds_tensor)
-        
+
         # Create display label
         label_map = {
             'baseline': 'BASELINE',
             'bsp': 'BSP',
             'log-bsp': 'Log-BSP',
+            'weird-log-bsp': 'Weird-Log-BSP',
             'sa-bsp-perbin': 'SA-BSP (Per-bin)',
             'sa-bsp-global': 'SA-BSP (Global)',
             'sa-bsp-combined': 'SA-BSP (Combined)'
         }
         spec_key = f"{MODEL_ARCH.upper()} + {label_map[loss_type]}"
-        
+
         spectra[spec_key] = {
             'frequencies': k_pred,
             'energy_median': E_pred_median,
             'energy_p16': E_pred_p16,
             'energy_p84': E_pred_p84
         }
-        
+
         print(f" ✓ ({all_preds_tensor.shape[0]} samples)")
     except Exception as e:
         print(f" ❌ Error: {e}")
         continue
 
-print(f"\\n✓ Spectra computed for {len(spectra)} entries with percentile-based uncertainty bands\\n")
+print(f"\\n✓ Spectra computed for {len(spectra)} entries with percentile-based uncertainty bands")
+print(f"  • Total models: 7 variants")
+print(f"  • Unbinned spectrum: Full FFT resolution (~{len(k_true)} frequencies)")
+print(f"  • Uncertainty bands: 16th-84th percentiles (≈ ±1σ) across all validation samples\\n")"""),
 
-# Plot energy spectrum with percentile-based uncertainty bands (safe for log scale!)
+    # Cell 26: Code - Plot A: Fixed Loss Variants Spectrum
+    code_cell("""# ============================================================================
+# PLOT A: Fixed Loss Variants Spectrum (True, BASELINE, BSP, LOG-BSP, WEIRD-LOG-BSP)
+# ============================================================================
 fig, ax = plt.subplots(figsize=(14, 9))
 
-# Color scheme for loss types
-colors_plot = {
-    'True': '#000000',  # Black for ground truth
-    'baseline': '#1f77b4',
-    'bsp': '#ff7f0e',
-    'log-bsp': '#2ca02c',
-    'sa-bsp-perbin': '#d62728',
-    'sa-bsp-global': '#9467bd',
-    'sa-bsp-combined': '#17becf'
+# Color scheme for fixed variants
+colors_fixed_spectrum = {
+    'True': '#000000',  # Black
+    'baseline': '#1f77b4',  # Blue
+    'bsp': '#ff7f0e',  # Orange
+    'log-bsp': '#2ca02c',  # Green
+    'weird-log-bsp': '#8B4513'  # Brown
 }
 
-# Plot ground truth with uncertainty band (black)
+# Plot ground truth first
 if 'True' in spectra:
     data = spectra['True']
     k = data['frequencies']
     E_median = data['energy_median']
     E_p16 = data['energy_p16']
     E_p84 = data['energy_p84']
-    
-    # Plot median line
-    ax.loglog(k, E_median, color=colors_plot['True'], linewidth=3, 
-             label='True (Real Data)', zorder=10, alpha=0.9)
-    
-    # Plot percentile-based uncertainty band (16th-84th percentiles ≈ ±1σ)
-    # These are GUARANTEED to be positive → safe for log scale!
-    ax.fill_between(k, E_p16, E_p84,
-                     color=colors_plot['True'], alpha=0.15, zorder=9,
-                     label='True (16th-84th percentile)')
 
-# Plot model predictions with percentile-based uncertainty bands
-for loss_type in ['baseline', 'bsp', 'log-bsp', 'sa-bsp-perbin', 'sa-bsp-global', 'sa-bsp-combined']:
-    label_map = {
-        'baseline': 'BASELINE',
-        'bsp': 'BSP',
-        'log-bsp': 'Log-BSP',
-        'sa-bsp-perbin': 'SA-BSP (Per-bin)',
-        'sa-bsp-global': 'SA-BSP (Global)',
-        'sa-bsp-combined': 'SA-BSP (Combined)'
-    }
-    label_key = f"{MODEL_ARCH.upper()} + {label_map[loss_type]}"
-    
-    # Check if spectrum exists before plotting
+    ax.loglog(k, E_median, color=colors_fixed_spectrum['True'], linewidth=3.5,
+             label='True (Real Data)', zorder=10, alpha=0.95)
+    ax.fill_between(k, E_p16, E_p84, color=colors_fixed_spectrum['True'],
+                     alpha=0.15, zorder=9, label='True (16th-84th %ile)')
+
+# Plot fixed variants
+fixed_variants_spec = ['baseline', 'bsp', 'log-bsp', 'weird-log-bsp']
+label_map_fixed_spec = {
+    'baseline': 'BASELINE',
+    'bsp': 'BSP',
+    'log-bsp': 'Log-BSP',
+    'weird-log-bsp': 'Weird-Log-BSP'
+}
+
+for loss_type in fixed_variants_spec:
+    label_key = f"{MODEL_ARCH.upper()} + {label_map_fixed_spec[loss_type]}"
+
     if label_key not in spectra:
-        print(f"  ⚠️  Skipping plot for {loss_type.upper()}: '{label_key}' not in spectra dictionary")
+        print(f"  ⚠️  Skipping {loss_type}: '{label_key}' not in spectra")
         continue
-    
+
     data = spectra[label_key]
     k = data['frequencies']
     E_median = data['energy_median']
     E_p16 = data['energy_p16']
     E_p84 = data['energy_p84']
-    
-    color = colors_plot[loss_type]
-    
+
+    color = colors_fixed_spectrum[loss_type]
+
     # Plot median line
-    ax.loglog(k, E_median, color=color, linewidth=2.5, 
-             alpha=0.85, label=label_key, zorder=5)
-    
-    # Plot percentile-based uncertainty band (guaranteed positive for log scale)
-    ax.fill_between(k, E_p16, E_p84,
-                     color=color, alpha=0.12, zorder=4)
+    ax.loglog(k, E_median, color=color, linewidth=2.5,
+             alpha=0.85, label=label_map_fixed_spec[loss_type], zorder=5)
+
+    # Plot uncertainty band
+    ax.fill_between(k, E_p16, E_p84, color=color, alpha=0.12, zorder=4)
 
 # Configure plot
 ax.set_xlabel('Frequency (normalized)', fontsize=14, fontweight='bold')
 ax.set_ylabel('E(k) - Spectral Power', fontsize=14, fontweight='bold')
-ax.set_title(f'Energy Spectrum Comparison with Percentile Uncertainty Bands\\n{MODEL_ARCH.upper()} Model (6 Loss Variants)', 
+ax.set_title(f'Energy Spectrum: Fixed Loss Variants\\n{MODEL_ARCH.upper()} Model with Percentile Uncertainty Bands',
             fontsize=16, fontweight='bold')
-ax.legend(fontsize=10, loc='best', framealpha=0.95, ncol=1)
+ax.legend(fontsize=11, loc='best', framealpha=0.95)
 ax.grid(True, alpha=0.3, which='both', linestyle='--')
-
-# Set frequency range to 0-25Hz (full dataset range)
 ax.set_xlim(0, 25.0)
 
 plt.tight_layout()
 plt.show()
 
-print(f"\\n✓ Energy spectrum plot complete")
-print(f"  • Unbinned spectrum: Full FFT resolution (~{len(k_true)} frequencies)")
-print(f"  • Uncertainty bands: 16th-84th percentiles (≈ ±1σ) across all validation samples")
-print(f"  • Percentiles are ALWAYS positive → safe for log-scale display!")
-print(f"  • This visualization shows spectral bias: deviation from ground truth at high frequencies")
-print(f"  • Log-BSP and SA-BSP variants should show better high-frequency matching than baseline")"""),
+print("✓ Plot A complete: Fixed loss variants spectrum")"""),
 
-    # Cell 24: Markdown
+    # Cell 27: Code - Plot B: Self-Adaptive Variants Spectrum
+    code_cell("""# ============================================================================
+# PLOT B: Self-Adaptive Variants Spectrum (True, BASELINE, LOG-BSP, SA-BSP variants)
+# ============================================================================
+fig, ax = plt.subplots(figsize=(14, 9))
+
+# Color scheme for adaptive variants
+colors_adaptive_spectrum = {
+    'True': '#000000',  # Black
+    'baseline': '#1f77b4',  # Blue (reference)
+    'log-bsp': '#2ca02c',  # Green (reference)
+    'sa-bsp-perbin': '#d62728',  # Red
+    'sa-bsp-global': '#9467bd',  # Purple
+    'sa-bsp-combined': '#17becf'  # Cyan
+}
+
+# Plot ground truth first
+if 'True' in spectra:
+    data = spectra['True']
+    k = data['frequencies']
+    E_median = data['energy_median']
+    E_p16 = data['energy_p16']
+    E_p84 = data['energy_p84']
+
+    ax.loglog(k, E_median, color=colors_adaptive_spectrum['True'], linewidth=3.5,
+             label='True (Real Data)', zorder=10, alpha=0.95)
+    ax.fill_between(k, E_p16, E_p84, color=colors_adaptive_spectrum['True'],
+                     alpha=0.15, zorder=9, label='True (16th-84th %ile)')
+
+# Plot adaptive variants (including baseline and log-bsp as references)
+adaptive_variants_spec = ['baseline', 'log-bsp', 'sa-bsp-perbin', 'sa-bsp-global', 'sa-bsp-combined']
+label_map_adaptive_spec = {
+    'baseline': 'BASELINE (ref)',
+    'log-bsp': 'Log-BSP (ref)',
+    'sa-bsp-perbin': 'SA-BSP Per-bin',
+    'sa-bsp-global': 'SA-BSP Global',
+    'sa-bsp-combined': 'SA-BSP Combined'
+}
+
+for loss_type in adaptive_variants_spec:
+    label_key = f"{MODEL_ARCH.upper()} + {label_map_adaptive_spec[loss_type].replace(' (ref)', '')}"
+
+    if label_key not in spectra:
+        print(f"  ⚠️  Skipping {loss_type}: '{label_key}' not in spectra")
+        continue
+
+    data = spectra[label_key]
+    k = data['frequencies']
+    E_median = data['energy_median']
+    E_p16 = data['energy_p16']
+    E_p84 = data['energy_p84']
+
+    color = colors_adaptive_spectrum[loss_type]
+
+    # Plot median line
+    ax.loglog(k, E_median, color=color, linewidth=2.5,
+             alpha=0.85, label=label_map_adaptive_spec[loss_type], zorder=5)
+
+    # Plot uncertainty band
+    ax.fill_between(k, E_p16, E_p84, color=color, alpha=0.12, zorder=4)
+
+# Configure plot
+ax.set_xlabel('Frequency (normalized)', fontsize=14, fontweight='bold')
+ax.set_ylabel('E(k) - Spectral Power', fontsize=14, fontweight='bold')
+ax.set_title(f'Energy Spectrum: Self-Adaptive Loss Variants\\n{MODEL_ARCH.upper()} Model with Percentile Uncertainty Bands',
+            fontsize=16, fontweight='bold')
+ax.legend(fontsize=11, loc='best', framealpha=0.95)
+ax.grid(True, alpha=0.3, which='both', linestyle='--')
+ax.set_xlim(0, 25.0)
+
+plt.tight_layout()
+plt.show()
+
+print("✓ Plot B complete: Self-adaptive variants spectrum")
+print(f"\\n✓ Energy spectrum visualization complete")
+print(f"  • Unbinned spectrum: Full FFT resolution (~{len(k_true)} frequencies)")
+print(f"  • Uncertainty bands: 16th-84th percentiles (≈ ±1σ)")
+print(f"  • Percentiles are ALWAYS positive → safe for log-scale display!")
+print(f"  • Shows spectral bias: deviation from ground truth at high frequencies")"""),
+
+    # Cell 28: Markdown
     markdown_cell("""## Cell 8: Spectral Bias Quantification
 
 Compute spectral bias metrics to quantify how well each model captures high-frequency content."""),
 
-    # Cell 25: Code
+    # Cell 29: Code
     code_cell("""from src.core.visualization.spectral_analysis import compute_spectral_bias_metric
 
-print("="*70)
-print("SPECTRAL BIAS METRICS")
-print("="*70)
+print("="*80)
+print("SPECTRAL BIAS METRICS (7 Loss Variants)")
+print("="*80)
 print("\\nQuantifies how well each model captures different frequency ranges.")
 print("Spectral Bias Ratio = High Freq Error / Low Freq Error")
 print("  - Ratio > 2.0: Significant spectral bias (struggles with high frequencies)")
 print("  - Ratio > 1.5: Moderate spectral bias")
 print("  - Ratio ≤ 1.5: Low spectral bias (captures frequencies well)")
-print("="*70)
+print("="*80)
 
 # Compute metrics for each trained model
 spectral_metrics = {}
 
-for loss_type in ['baseline', 'bsp', 'log-bsp', 'sa-bsp-perbin', 'sa-bsp-global', 'sa-bsp-combined']:
+all_variants_bias = ['baseline', 'bsp', 'log-bsp', 'weird-log-bsp', 'sa-bsp-perbin', 'sa-bsp-global', 'sa-bsp-combined']
+
+for loss_type in all_variants_bias:
     key = f"{MODEL_ARCH}_{loss_type}"
     model_trained = trained_models[key]
     model_trained.eval()
     model_trained.to(device)
-    
+
     with torch.no_grad():
         pred = model_trained(val_input)
-    
+
     metrics = compute_spectral_bias_metric(pred.cpu(), val_target.cpu(), n_bins=32)
     spectral_metrics[loss_type] = metrics
-    
+
     label_map = {
         'baseline': 'BASELINE',
         'bsp': 'BSP',
         'log-bsp': 'Log-BSP',
+        'weird-log-bsp': 'Weird-Log-BSP',
         'sa-bsp-perbin': 'SA-BSP (Per-bin)',
         'sa-bsp-global': 'SA-BSP (Global)',
         'sa-bsp-combined': 'SA-BSP (Combined)'
     }
-    
+
     print(f"\\n{MODEL_ARCH.upper()} + {label_map[loss_type]}:")
     print(f"  Low frequency error:   {metrics['low_freq_error']:.6f}")
     print(f"  Mid frequency error:   {metrics['mid_freq_error']:.6f}")
     print(f"  High frequency error:  {metrics['high_freq_error']:.6f}")
     print(f"  Spectral bias ratio:   {metrics['spectral_bias_ratio']:.4f}")
-    
+
     # Interpretation
     if metrics['spectral_bias_ratio'] > 2.0:
         print(f"  → ⚠️  SIGNIFICANT spectral bias detected!")
@@ -1580,69 +1760,114 @@ for loss_type in ['baseline', 'bsp', 'log-bsp', 'sa-bsp-perbin', 'sa-bsp-global'
         print(f"     Model captures frequency content well")
 
 # Create comparison visualization
-print(f"\\n{'='*70}")
-print("Spectral Bias Comparison")
-print(f"{'='*70}")
+print(f"\\n{'='*80}")
+print("Spectral Bias Comparison (7 Variants)")
+print(f"{'='*80}")
 
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 6))
+fig, axes = plt.subplots(2, 2, figsize=(18, 12))
 
-# Bar plot 1: Frequency errors
-loss_types = ['baseline', 'bsp', 'log-bsp', 'sa-bsp-perbin', 'sa-bsp-global', 'sa-bsp-combined']
-x = np.arange(len(loss_types))
-width = 0.2
+# Bar plot 1: Frequency errors (all 7 variants)
+loss_types_bias = all_variants_bias
+x = np.arange(len(loss_types_bias))
+width = 0.22
 
-low_errors = [spectral_metrics[lt]['low_freq_error'] for lt in loss_types]
-mid_errors = [spectral_metrics[lt]['mid_freq_error'] for lt in loss_types]
-high_errors = [spectral_metrics[lt]['high_freq_error'] for lt in loss_types]
+low_errors = [spectral_metrics[lt]['low_freq_error'] for lt in loss_types_bias]
+mid_errors = [spectral_metrics[lt]['mid_freq_error'] for lt in loss_types_bias]
+high_errors = [spectral_metrics[lt]['high_freq_error'] for lt in loss_types_bias]
 
-ax1.bar(x - width, low_errors, width, label='Low Freq', color='#2ca02c', alpha=0.8)
-ax1.bar(x, mid_errors, width, label='Mid Freq', color='#ff7f0e', alpha=0.8)
-ax1.bar(x + width, high_errors, width, label='High Freq', color='#d62728', alpha=0.8)
+axes[0, 0].bar(x - width, low_errors, width, label='Low Freq', color='#2ca02c', alpha=0.8)
+axes[0, 0].bar(x, mid_errors, width, label='Mid Freq', color='#ff7f0e', alpha=0.8)
+axes[0, 0].bar(x + width, high_errors, width, label='High Freq', color='#d62728', alpha=0.8)
 
-ax1.set_xlabel('Loss Type', fontsize=12, fontweight='bold')
-ax1.set_ylabel('Frequency Error', fontsize=12, fontweight='bold')
-ax1.set_title('Frequency Range Errors', fontsize=14, fontweight='bold')
-ax1.set_yscale('log')  # LOG SCALE
-ax1.set_xticks(x)
-ax1.set_xticklabels(['BASE', 'BSP', 'Log-BSP', 'SA-Per', 'SA-Glob', 'SA-Comb'], rotation=15, ha='right')
-ax1.legend(fontsize=11)
-ax1.grid(True, alpha=0.3, axis='y', which='both')
+axes[0, 0].set_xlabel('Loss Type', fontsize=11, fontweight='bold')
+axes[0, 0].set_ylabel('Frequency Error', fontsize=11, fontweight='bold')
+axes[0, 0].set_title('Frequency Range Errors (All Variants)', fontsize=13, fontweight='bold')
+axes[0, 0].set_yscale('log')  # LOG SCALE
+axes[0, 0].set_xticks(x)
+axes[0, 0].set_xticklabels(['BASE', 'BSP', 'Log', 'W-Log', 'SA-Per', 'SA-Glo', 'SA-Cmb'],
+                            rotation=20, ha='right', fontsize=10)
+axes[0, 0].legend(fontsize=10)
+axes[0, 0].grid(True, alpha=0.3, axis='y', which='both')
 
-# Bar plot 2: Spectral bias ratio
-bias_ratios = [spectral_metrics[lt]['spectral_bias_ratio'] for lt in loss_types]
-colors_bars = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#17becf']
+# Bar plot 2: Spectral bias ratio (all 7 variants)
+bias_ratios = [spectral_metrics[lt]['spectral_bias_ratio'] for lt in loss_types_bias]
+colors_bars = ['#1f77b4', '#ff7f0e', '#2ca02c', '#8B4513', '#d62728', '#9467bd', '#17becf']
 
-bars = ax2.bar(x, bias_ratios, color=colors_bars, alpha=0.8, edgecolor='black', linewidth=1.5)
+bars = axes[0, 1].bar(x, bias_ratios, color=colors_bars, alpha=0.8, edgecolor='black', linewidth=1.5)
 
 # Add threshold lines
-ax2.axhline(y=2.0, color='red', linestyle='--', linewidth=2, alpha=0.7, label='Significant bias threshold')
-ax2.axhline(y=1.5, color='orange', linestyle='--', linewidth=2, alpha=0.7, label='Moderate bias threshold')
+axes[0, 1].axhline(y=2.0, color='red', linestyle='--', linewidth=2, alpha=0.7, label='Significant bias')
+axes[0, 1].axhline(y=1.5, color='orange', linestyle='--', linewidth=2, alpha=0.7, label='Moderate bias')
 
-ax2.set_xlabel('Loss Type', fontsize=12, fontweight='bold')
-ax2.set_ylabel('Spectral Bias Ratio', fontsize=12, fontweight='bold')
-ax2.set_title('Spectral Bias Ratio (High/Low)', fontsize=14, fontweight='bold')
-ax2.set_xticks(x)
-ax2.set_xticklabels(['BASE', 'BSP', 'Log-BSP', 'SA-Per', 'SA-Glob', 'SA-Comb'], rotation=15, ha='right')
-ax2.legend(fontsize=10, loc='upper right')
-ax2.grid(True, alpha=0.3, axis='y')
+axes[0, 1].set_xlabel('Loss Type', fontsize=11, fontweight='bold')
+axes[0, 1].set_ylabel('Spectral Bias Ratio', fontsize=11, fontweight='bold')
+axes[0, 1].set_title('Spectral Bias Ratio (High/Low)', fontsize=13, fontweight='bold')
+axes[0, 1].set_xticks(x)
+axes[0, 1].set_xticklabels(['BASE', 'BSP', 'Log', 'W-Log', 'SA-Per', 'SA-Glo', 'SA-Cmb'],
+                            rotation=20, ha='right', fontsize=10)
+axes[0, 1].legend(fontsize=9, loc='upper right')
+axes[0, 1].grid(True, alpha=0.3, axis='y')
 
 # Add value labels on bars
 for i, (bar, ratio) in enumerate(zip(bars, bias_ratios)):
     height = bar.get_height()
-    ax2.text(bar.get_x() + bar.get_width()/2., height + 0.05,
-            f'{ratio:.2f}', ha='center', va='bottom', fontsize=10, fontweight='bold')
+    axes[0, 1].text(bar.get_x() + bar.get_width()/2., height + 0.05,
+                     f'{ratio:.2f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
 
-plt.suptitle(f'{MODEL_ARCH.upper()}: Spectral Bias Analysis (6 Loss Variants)', fontsize=16, fontweight='bold')
+# Bar plot 3: Fixed variants only (easier to compare)
+fixed_variants_bias = ['baseline', 'bsp', 'log-bsp', 'weird-log-bsp']
+x_fixed = np.arange(len(fixed_variants_bias))
+
+low_errors_fixed = [spectral_metrics[lt]['low_freq_error'] for lt in fixed_variants_bias]
+mid_errors_fixed = [spectral_metrics[lt]['mid_freq_error'] for lt in fixed_variants_bias]
+high_errors_fixed = [spectral_metrics[lt]['high_freq_error'] for lt in fixed_variants_bias]
+
+axes[1, 0].bar(x_fixed - width, low_errors_fixed, width, label='Low Freq', color='#2ca02c', alpha=0.8)
+axes[1, 0].bar(x_fixed, mid_errors_fixed, width, label='Mid Freq', color='#ff7f0e', alpha=0.8)
+axes[1, 0].bar(x_fixed + width, high_errors_fixed, width, label='High Freq', color='#d62728', alpha=0.8)
+
+axes[1, 0].set_xlabel('Loss Type', fontsize=11, fontweight='bold')
+axes[1, 0].set_ylabel('Frequency Error', fontsize=11, fontweight='bold')
+axes[1, 0].set_title('Fixed Variants Comparison', fontsize=13, fontweight='bold')
+axes[1, 0].set_yscale('log')
+axes[1, 0].set_xticks(x_fixed)
+axes[1, 0].set_xticklabels(['BASELINE', 'BSP', 'Log-BSP', 'Weird-Log'], rotation=15, ha='right')
+axes[1, 0].legend(fontsize=10)
+axes[1, 0].grid(True, alpha=0.3, axis='y', which='both')
+
+# Bar plot 4: Adaptive variants only
+adaptive_variants_bias = ['baseline', 'log-bsp', 'sa-bsp-perbin', 'sa-bsp-global', 'sa-bsp-combined']
+x_adaptive = np.arange(len(adaptive_variants_bias))
+
+low_errors_adaptive = [spectral_metrics[lt]['low_freq_error'] for lt in adaptive_variants_bias]
+mid_errors_adaptive = [spectral_metrics[lt]['mid_freq_error'] for lt in adaptive_variants_bias]
+high_errors_adaptive = [spectral_metrics[lt]['high_freq_error'] for lt in adaptive_variants_bias]
+
+axes[1, 1].bar(x_adaptive - width, low_errors_adaptive, width, label='Low Freq', color='#2ca02c', alpha=0.8)
+axes[1, 1].bar(x_adaptive, mid_errors_adaptive, width, label='Mid Freq', color='#ff7f0e', alpha=0.8)
+axes[1, 1].bar(x_adaptive + width, high_errors_adaptive, width, label='High Freq', color='#d62728', alpha=0.8)
+
+axes[1, 1].set_xlabel('Loss Type', fontsize=11, fontweight='bold')
+axes[1, 1].set_ylabel('Frequency Error', fontsize=11, fontweight='bold')
+axes[1, 1].set_title('Adaptive Variants Comparison', fontsize=13, fontweight='bold')
+axes[1, 1].set_yscale('log')
+axes[1, 1].set_xticks(x_adaptive)
+axes[1, 1].set_xticklabels(['BASE', 'Log-BSP', 'SA-Per', 'SA-Glo', 'SA-Cmb'], rotation=15, ha='right')
+axes[1, 1].legend(fontsize=10)
+axes[1, 1].grid(True, alpha=0.3, axis='y', which='both')
+
+plt.suptitle(f'{MODEL_ARCH.upper()}: Spectral Bias Analysis (7 Loss Variants)', fontsize=16, fontweight='bold')
 plt.tight_layout()
 plt.show()
 
-print(f"\\n{'='*70}")
+print(f"\\n{'='*80}")
 print("✅ Spectral bias analysis complete!")
-print(f"{'='*70}")
+print(f"{'='*80}")
 print("\\nKey Findings:")
 print("  • Baseline: Pure MSE - typically shows significant spectral bias")
 print("  • BSP: Fixed spectral loss with k² weighting - moderate improvement")
-print("  • Log-BSP: Log-domain spectral loss - addresses wide dynamic range")
+print("  • Log-BSP: Log-domain spectral loss - addresses wide dynamic range, optimizes SHAPE")
+print("  • Weird-Log-BSP: Log-domain WITHOUT min-max norm - optimizes absolute ENERGY")
 print("  • SA-BSP (Per-bin): Adaptive per-bin weights - emphasize hard frequencies")
 print("  • SA-BSP (Global): Adaptive MSE/BSP balance - optimize overall trade-off")
 print("  • SA-BSP (Combined): Full competitive dynamics - most expressive approach")"""),
