@@ -470,12 +470,19 @@ class SimpleTrainer:
         total_bsp_loss = 0.0
         num_batches = 0
 
-        # For DeepONet: cycle sequence loader (fewer samples) to match per-timestep loader length
-        # Only use dual-batch mode for combined losses (MSE + BSP)
-        # For single losses (e.g., baseline FieldErrorLoss), fall through to sequence-only mode
-        if (self.is_deeponet and
-            self.per_timestep_train_loader is not None and
-            isinstance(self.criterion, CombinedLoss)):
+        # For DeepONet: use appropriate training mode based on loss type
+        # - Combined losses (MSE + BSP): Use dual-batch mode (per-timestep MSE + sequence BSP)
+        # - Baseline MSE: Use per-timestep-only mode (320K samples)
+        # - Sequence-based losses (BSP only): Use sequence-only mode
+        use_dual_batch = (self.is_deeponet and
+                         self.per_timestep_train_loader is not None and
+                         isinstance(self.criterion, CombinedLoss))
+
+        use_per_timestep_only = (self.is_deeponet and
+                                self.per_timestep_train_loader is not None and
+                                not isinstance(self.criterion, (CombinedLoss, BinnedSpectralLoss, SelfAdaptiveBSPLoss)))
+
+        if use_dual_batch:
             # DeepONet with dual-batch training (combined loss only)
             # Per-timestep loader has ~320K samples, sequence has ~100 samples
             # Cycle sequence loader to match the iteration count of per-timestep
@@ -590,8 +597,57 @@ class SimpleTrainer:
                 total_bsp_loss += bsp_loss.item()
                 num_batches += 1
 
+        elif use_per_timestep_only:
+            # DeepONet with baseline MSE (per-timestep only, no BSP)
+            # Uses per-timestep loader with 320K samples for proper MSE training
+            print(f"  Using per-timestep-only mode for DeepONet baseline MSE")
+
+            for batch_idx, per_timestep_batch in enumerate(self.per_timestep_train_loader):
+                # Extract per-timestep data
+                per_ts_inputs = per_timestep_batch['input'].to(self.device)      # [B, 4000]
+                per_ts_targets = per_timestep_batch['target'].to(self.device)     # [B]
+                per_ts_time_coords = per_timestep_batch['time_coord'].to(self.device)  # [B]
+
+                # Forward pass with AMP
+                self.optimizer.zero_grad()
+                with autocast(device_type=self.amp_device, enabled=self.use_amp):
+                    per_ts_outputs = self.model.forward_per_timestep(per_ts_inputs, per_ts_time_coords)
+                    per_ts_outputs = per_ts_outputs.squeeze(-1)  # [B, 1] → [B]
+
+                    # Compute MSE loss
+                    loss = self.criterion(per_ts_outputs, per_ts_targets)
+                    final_loss = loss.mean() if loss.ndim > 0 else loss
+
+                # Check for NaN
+                if self._check_for_nan(final_loss, 'per_timestep_mse_loss', self.current_epoch, batch_idx):
+                    raise RuntimeError(f"NaN detected in per-timestep MSE loss at epoch {self.current_epoch}, batch {batch_idx}")
+
+                # Backward pass with gradient clipping
+                if self.use_amp:
+                    self.scaler.scale(final_loss).backward()
+                    if self.config.max_grad_norm > 0:
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    final_loss.backward()
+                    if self.config.max_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
+                    self.optimizer.step()
+
+                # Step scheduler
+                if self.config.scheduler_type == 'cosine':
+                    self.scheduler.step()
+
+                # Accumulate
+                total_loss += final_loss.item()
+                total_mse_loss += final_loss.item()
+                total_bsp_loss += 0.0  # No BSP component
+                num_batches += 1
+
         else:
-            # FNO/UNet or DeepONet sequence-only training
+            # FNO/UNet sequence-only training OR DeepONet with sequence-based losses (BSP only)
             for batch_idx, batch in enumerate(self.sequence_train_loader):
                 # Extract inputs, targets, and sample indices (for cache lookup)
                 if len(batch) == 3:  # New format with indices
@@ -719,10 +775,16 @@ class SimpleTrainer:
         all_predictions = []
         all_targets = []
 
-        # Only use dual-batch mode for combined losses (same as training)
-        if (self.is_deeponet and
-            self.per_timestep_val_loader is not None and
-            isinstance(self.criterion, CombinedLoss)):
+        # Determine validation mode (same logic as training)
+        use_dual_batch = (self.is_deeponet and
+                         self.per_timestep_val_loader is not None and
+                         isinstance(self.criterion, CombinedLoss))
+
+        use_per_timestep_only = (self.is_deeponet and
+                                self.per_timestep_val_loader is not None and
+                                not isinstance(self.criterion, (CombinedLoss, BinnedSpectralLoss, SelfAdaptiveBSPLoss)))
+
+        if use_dual_batch:
             # DeepONet with dual-batch validation (combined loss only)
             # Cycle sequence loader to match per-timestep loader length
             sequence_iter = cycle(self.sequence_val_loader)
@@ -779,8 +841,34 @@ class SimpleTrainer:
                 all_predictions.append(seq_outputs.detach().cpu())
                 all_targets.append(seq_targets.detach().cpu())
 
+        elif use_per_timestep_only:
+            # DeepONet with baseline MSE validation (per-timestep only)
+            for per_timestep_batch in self.per_timestep_val_loader:
+                # Extract per-timestep data
+                per_ts_inputs = per_timestep_batch['input'].to(self.device)      # [B, 4000]
+                per_ts_targets = per_timestep_batch['target'].to(self.device)     # [B]
+                per_ts_time_coords = per_timestep_batch['time_coord'].to(self.device)  # [B]
+
+                # Forward pass with AMP
+                with autocast(device_type=self.amp_device, enabled=self.use_amp):
+                    per_ts_outputs = self.model.forward_per_timestep(per_ts_inputs, per_ts_time_coords)
+                    per_ts_outputs = per_ts_outputs.squeeze(-1)  # [B, 1] → [B]
+
+                    # Compute MSE loss
+                    loss = self.criterion(per_ts_outputs, per_ts_targets)
+                    final_loss = loss.mean() if loss.ndim > 0 else loss
+
+                # Accumulate
+                total_loss += final_loss.item()
+                total_mse_loss += final_loss.item()
+                total_bsp_loss += 0.0  # No BSP component
+                num_batches += 1
+
+                # Note: Can't collect full sequences for eval metrics in per-timestep mode
+                # Eval metrics will be skipped for this mode
+
         else:
-            # FNO/UNet or DeepONet with sequence-only validation
+            # FNO/UNet sequence-only validation OR DeepONet with sequence-based losses
             for batch in self.sequence_val_loader:
                 # Extract inputs, targets, and sample indices
                 if len(batch) == 3:  # New format with indices
