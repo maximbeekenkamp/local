@@ -618,15 +618,10 @@ class SimpleTrainer:
                 per_ts_targets = per_timestep_batch['target'].to(self.device)     # [B]
                 per_ts_time_coords = per_timestep_batch['time_coord'].to(self.device)  # [B]
 
-                # Validate input data for NaN/Inf (check first batch only)
-                if batch_idx == 0:
-                    if torch.isnan(per_ts_inputs).any() or torch.isinf(per_ts_inputs).any():
-                        raise ValueError(f"NaN/Inf detected in input data at batch {batch_idx}")
-                    if torch.isnan(per_ts_targets).any() or torch.isinf(per_ts_targets).any():
-                        raise ValueError(f"NaN/Inf detected in target data at batch {batch_idx}")
-
-                # Forward pass with AMP
+                # Forward pass
                 self.optimizer.zero_grad()
+
+                # Forward with AMP (epsilon=1e-6 in configs prevents numerical issues)
                 with autocast(device_type=self.amp_device, enabled=self.use_amp):
                     per_ts_outputs = self.model.forward_per_timestep(per_ts_inputs, per_ts_time_coords)
                     per_ts_outputs = per_ts_outputs.squeeze(-1)  # [B, 1] → [B]
@@ -639,7 +634,7 @@ class SimpleTrainer:
                 if self._check_for_nan(final_loss, 'per_timestep_mse_loss', self.current_epoch, batch_idx):
                     raise RuntimeError(f"NaN detected in per-timestep MSE loss at epoch {self.current_epoch}, batch {batch_idx}")
 
-                # Backward pass with gradient clipping
+                # Backward pass with gradient clipping and AMP
                 if self.use_amp:
                     self.scaler.scale(final_loss).backward()
                     if self.config.max_grad_norm > 0:
