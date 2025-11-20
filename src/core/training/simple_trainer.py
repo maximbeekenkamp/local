@@ -289,12 +289,22 @@ class SimpleTrainer:
             if nan_params:
                 self.console.print(f"  Parameters with NaN/Inf gradients: {nan_params[:5]}...")
 
+            # Check gradient norms
+            total_norm = 0.0
+            for p in self.model.parameters():
+                if p.grad is not None:
+                    param_norm = p.grad.data.norm(2)
+                    total_norm += param_norm.item() ** 2
+            total_norm = total_norm ** 0.5
+            self.console.print(f"  Total gradient norm: {total_norm:.2e}")
+
             self.console.print(f"\n[yellow]Diagnostic Tips:[/yellow]")
-            self.console.print(f"  1. Check input data for NaN/Inf values")
-            self.console.print(f"  2. Reduce learning rate (current: {self.optimizer.param_groups[0]['lr']:.2e})")
-            self.console.print(f"  3. Increase epsilon in loss config (current: varies by loss)")
-            self.console.print(f"  4. Enable gradient clipping (max_grad_norm in config)")
-            self.console.print(f"  5. Check for division by zero in loss computation")
+            self.console.print(f"  1. Reduce learning rate (current: {self.optimizer.param_groups[0]['lr']:.2e})")
+            self.console.print(f"     Suggested: Try 1e-4 or 3e-4 for SOAP optimizer")
+            self.console.print(f"  2. Gradient clipping: {'ENABLED' if self.config.max_grad_norm > 0 else 'DISABLED'} (max_norm={self.config.max_grad_norm})")
+            self.console.print(f"  3. Check input data for NaN/Inf values")
+            self.console.print(f"  4. Increase epsilon in loss config if using BSP")
+            self.console.print(f"  5. Try Adam optimizer instead of SOAP (optimizer_type='adam' in config)")
 
             return True
         return False
@@ -607,6 +617,13 @@ class SimpleTrainer:
                 per_ts_inputs = per_timestep_batch['input'].to(self.device)      # [B, 4000]
                 per_ts_targets = per_timestep_batch['target'].to(self.device)     # [B]
                 per_ts_time_coords = per_timestep_batch['time_coord'].to(self.device)  # [B]
+
+                # Validate input data for NaN/Inf (check first batch only)
+                if batch_idx == 0:
+                    if torch.isnan(per_ts_inputs).any() or torch.isinf(per_ts_inputs).any():
+                        raise ValueError(f"NaN/Inf detected in input data at batch {batch_idx}")
+                    if torch.isnan(per_ts_targets).any() or torch.isinf(per_ts_targets).any():
+                        raise ValueError(f"NaN/Inf detected in target data at batch {batch_idx}")
 
                 # Forward pass with AMP
                 self.optimizer.zero_grad()
