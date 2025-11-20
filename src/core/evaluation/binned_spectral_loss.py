@@ -179,10 +179,25 @@ class BinnedSpectralLoss(nn.Module):
 
         # LOAD precomputed target spectra cache (for training speedup)
         self.target_cache = None
+        self.target_cache_path = target_cache_path
         if target_cache_path is not None:
-            self.target_cache = self._load_target_cache(target_cache_path)
-            print(f"  ✓ Loaded target cache: {target_cache_path}")
-            print(f"    Cached samples: {self.target_cache.shape[0]}")
+            try:
+                self.target_cache = self._load_target_cache(target_cache_path)
+                print(f"  ✓ Loaded target cache: {target_cache_path}")
+                print(f"    Cached samples: {self.target_cache.shape[0]}")
+            except FileNotFoundError as e:
+                print(f"  ⚠️  WARNING: Target cache not found: {target_cache_path}")
+                print(f"    BSP will compute target FFTs on-the-fly (2x memory usage)")
+                print(f"    Run 'python scripts/precompute_spectrum.py' to generate cache")
+                self.target_cache = None
+            except ValueError as e:
+                print(f"  ⚠️  WARNING: Target cache validation failed: {e}")
+                print(f"    BSP will compute target FFTs on-the-fly (2x memory usage)")
+                self.target_cache = None
+        else:
+            print(f"  ⚠️  WARNING: No target_cache_path specified")
+            print(f"    BSP will compute target FFTs on-the-fly (2x memory usage)")
+            print(f"    Consider using target_cache_path for ~40% memory reduction")
 
         # Bin-specific weights λ_k (BSP paper Algorithm 1, Table 4)
         # Compute based on lambda_k_mode

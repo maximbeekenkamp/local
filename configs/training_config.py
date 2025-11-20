@@ -56,6 +56,9 @@ class TrainingConfig:
         device: Device to use for training ('cuda' or 'cpu', default 'cuda')
         num_workers: Number of dataloader workers (default 4)
 
+        # Mixed Precision Training
+        use_amp: Whether to use automatic mixed precision (FP16/BF16) for memory reduction (default True)
+
         # Logging
         log_frequency: Log training metrics every N batches (default 10)
         verbose: Whether to print detailed logs (default True)
@@ -102,6 +105,9 @@ class TrainingConfig:
     # Device
     device: str = 'cuda'
     num_workers: int = 4
+
+    # Mixed Precision Training
+    use_amp: bool = True  # Use automatic mixed precision for ~50% memory reduction
 
     # Logging
     log_frequency: int = 10

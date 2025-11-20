@@ -12,16 +12,16 @@ Configuration Comparison Matrix:
 Config            | epsilon | lambda_k  | use_log | minmax_norm | loss_type | target_cache | adapt_mode
 -------------------------------------------------------------------------------------------------------------
 BASELINE          | N/A     | N/A       | N/A     | N/A         | N/A       | N/A          | N/A
-BSP               | 1e-8    | uniform   | False   | True        | mspe      | linear.npz   | N/A
-LOG_BSP           | 1e-8    | uniform   | True    | True        | l2_norm   | log.npz      | N/A
-WEIRD_LOG_BSP     | 1e-8    | uniform   | True    | False       | l2_norm   | log.npz      | N/A
+BSP               | 1e-6    | uniform   | False   | True        | mspe      | linear.npz   | N/A
+LOG_BSP           | 1e-6    | uniform   | True    | True        | l2_norm   | log.npz      | N/A
+WEIRD_LOG_BSP     | 1e-6    | uniform   | True    | False       | l2_norm   | log.npz      | N/A
 SA_BSP_PERBIN     | 1e-6    | uniform   | True    | True        | l2_norm   | log.npz      | per-bin
 SA_BSP_GLOBAL     | 1e-6    | uniform   | True    | True        | l2_norm   | log.npz      | global
 SA_BSP_COMBINED   | 1e-6    | uniform   | True    | True        | l2_norm   | log.npz      | combined
 =============================================================================================================
 
 Key Differences Explained:
-1. **epsilon**: All variants use 1e-8 for numerical stability (consistent across all loss types)
+1. **epsilon**: All variants use 1e-6 for numerical stability (increased from 1e-8 to prevent underflow/NaN)
 2. **lambda_k_mode**: All variants use 'uniform' (λ_k=1) initialization
 3. **use_log**: LOG-BSP and SA-BSP variants use log₁₀ transform for wider dynamic range
 4. **use_minmax_norm**: WEIRD_LOG_BSP disables per-sample normalization to match absolute energies
@@ -204,7 +204,7 @@ BSP_CONFIG = LossConfig(
         'spectral_loss': 'bsp',
         'mu': 1.0,  # μ = 1.0
         'n_bins': 32,
-        'epsilon': 1e-8,  # Paper default
+        'epsilon': 1e-6,  # Increased from 1e-8 for numerical stability (prevents NaN)
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
@@ -226,7 +226,7 @@ SA_BSP_PERBIN_CONFIG = LossConfig(
         'n_bins': 32,
         'adapt_mode': 'per-bin',  # 32 trainable weights (one per bin)
         'init_weight': 1.0,
-        'epsilon': 1e-8,  # Numerical stability constant
+        'epsilon': 1e-6,  # Increased from 1e-8 for numerical stability (prevents NaN)
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
@@ -248,7 +248,7 @@ SA_BSP_GLOBAL_CONFIG = LossConfig(
         'n_bins': 32,
         'adapt_mode': 'global',  # 2 trainable weights (w_mse + w_bsp) for MSE/BSP balance
         'init_weight': 1.0,
-        'epsilon': 1e-8,  # Numerical stability constant
+        'epsilon': 1e-6,  # Increased from 1e-8 for numerical stability (prevents NaN)
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
@@ -269,7 +269,7 @@ SA_BSP_COMBINED_CONFIG = LossConfig(
         'n_bins': 32,
         'adapt_mode': 'combined',  # 34 weights: w_mse + w_bsp + 32 per-bin
         'init_weight': 1.0,
-        'epsilon': 1e-8,  # Numerical stability constant
+        'epsilon': 1e-6,  # Increased from 1e-8 for numerical stability (prevents NaN)
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',  # Load bin edges from precomputed cache
@@ -289,7 +289,7 @@ LOG_BSP_CONFIG = LossConfig(
         'spectral_loss': 'bsp',
         'mu': 1.0,  # μ = 1.0 for log variant
         'n_bins': 32,
-        'epsilon': 1e-8,
+        'epsilon': 1e-6,  # Increased from 1e-8 for numerical stability (prevents NaN)
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',
@@ -310,7 +310,7 @@ WEIRD_LOG_BSP_CONFIG = LossConfig(
         'spectral_loss': 'bsp',
         'mu': 1.0,  # μ = 1.0
         'n_bins': 32,
-        'epsilon': 1e-8,
+        'epsilon': 1e-6,  # Increased from 1e-8 for numerical stability (prevents NaN)
         'binning_mode': 'linear',
         'signal_length': 4000,  # CDON temporal resolution
         'cache_path': 'cache/true_spectrum.npz',
