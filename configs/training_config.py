@@ -18,11 +18,12 @@ class TrainingConfig:
 
     Attributes:
         # Optimization
-        learning_rate: Initial learning rate (default 3e-3)
+        learning_rate: Initial learning rate (default 1e-3)
         num_epochs: Number of training epochs (default 100)
         batch_size: Batch size for training (default 16)
         weight_decay: L2 regularization weight (default 1e-4)
-        optimizer_type: Type of optimizer ('adam', 'adamw', 'soap', default 'soap')
+        optimizer_type: Type of optimizer ('adam', 'adamw', 'soap', default 'adam')
+                       Use 'adam' for DeepONet & FNO, 'soap' for UNet
 
         # SOAP Optimizer Parameters (only used when optimizer_type='soap')
         soap_betas: Beta coefficients for SOAP (default (0.95, 0.95))
@@ -69,7 +70,7 @@ class TrainingConfig:
     num_epochs: int = 100
     batch_size: int = 16
     weight_decay: float = 1e-4
-    optimizer_type: str = 'adam'  # Match reference (use Adam, not SOAP)
+    optimizer_type: str = 'adam'  # 'adam' for DeepONet & FNO, 'soap' for UNet
     max_grad_norm: float = 1.0  # Gradient clipping for stability (prevents NaN with large models)
 
     # SOAP Optimizer Parameters (only used when optimizer_type='soap')

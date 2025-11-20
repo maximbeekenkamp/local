@@ -318,7 +318,7 @@ class CDONDataset(Dataset):
 
 def create_cdon_dataloaders(
     data_dir: str,
-    batch_size_per_timestep: int = 32,
+    batch_size_per_timestep: int = 512,
     batch_size_sequence: int = 4,
     use_dummy: bool = False,
     val_split_ratio: float = 0.2,
@@ -339,7 +339,7 @@ def create_cdon_dataloaders(
 
     Args:
         data_dir: Path to data directory ('CDONData' or 'data/dummy_cdon')
-        batch_size_per_timestep: Batch size for per-timestep loader (default 32)
+        batch_size_per_timestep: Batch size for per-timestep loader (default 512)
         batch_size_sequence: Batch size for sequence loader (default 4)
         use_dummy: Whether using dummy data (informational)
         val_split_ratio: Fraction of training data for validation (default 0.2)
@@ -361,7 +361,7 @@ def create_cdon_dataloaders(
     Note:
         Per-timestep loaders (for DeepONet MSE):
         - Dict format with 'input', 'target', 'time_coord', 'penalty'
-        - Large batch size (32) due to many samples available
+        - Large batch size (512) due to many samples available
         - SHUFFLED for better training
 
         Sequence loaders (for BSP and FNO/UNet):
