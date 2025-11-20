@@ -18,7 +18,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from typing import Dict, Any, Optional, Tuple
 from pathlib import Path
 from itertools import cycle
@@ -199,7 +199,8 @@ class SimpleTrainer:
 
         # Mixed Precision Training (AMP) for memory reduction and stability
         self.use_amp = config.use_amp and self.device.type == 'cuda'
-        self.scaler = GradScaler() if self.use_amp else None
+        self.scaler = GradScaler('cuda') if self.use_amp else None
+        self.amp_device = 'cuda' if self.use_amp else 'cpu'
         if self.use_amp:
             print(f"  ✓ Automatic Mixed Precision (AMP) enabled for ~50% memory reduction")
 
@@ -491,7 +492,7 @@ class SimpleTrainer:
                 per_ts_time_coords = per_timestep_batch['time_coord'].to(self.device)  # [B]
 
                 # Forward per-timestep with AMP
-                with autocast(enabled=self.use_amp):
+                with autocast(device_type=self.amp_device, enabled=self.use_amp):
                     per_ts_outputs = self.model.forward_per_timestep(per_ts_inputs, per_ts_time_coords)
                     per_ts_outputs = per_ts_outputs.squeeze(-1)  # [B, 1] → [B]
 
@@ -516,7 +517,7 @@ class SimpleTrainer:
                     sample_indices = None
 
                 # Forward sequence with AMP
-                with autocast(enabled=self.use_amp):
+                with autocast(device_type=self.amp_device, enabled=self.use_amp):
                     seq_outputs = self.model.forward_sequence(seq_inputs)  # [B, 1, 4000]
 
                     # Compute BSP loss (pass sample indices for cache lookup)
@@ -540,10 +541,17 @@ class SimpleTrainer:
                 weighted_mse_loss = self.lambda_mse * mse_loss
                 if self.use_amp:
                     self.scaler.scale(weighted_mse_loss).backward()
+                    # Gradient clipping (unscale first for AMP)
+                    if self.config.max_grad_norm > 0:
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                 else:
                     weighted_mse_loss.backward()
+                    # Gradient clipping
+                    if self.config.max_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
                     self.optimizer.step()
                 # Note: Don't update adaptive weights yet - wait for BSP backward
 
@@ -555,10 +563,17 @@ class SimpleTrainer:
                 weighted_bsp_loss = self.lambda_bsp * bsp_loss
                 if self.use_amp:
                     self.scaler.scale(weighted_bsp_loss).backward()
+                    # Gradient clipping (unscale first for AMP)
+                    if self.config.max_grad_norm > 0:
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                 else:
                     weighted_bsp_loss.backward()
+                    # Gradient clipping
+                    if self.config.max_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
                     self.optimizer.step()
                 self._update_adaptive_weights()  # Update adaptive weights after BSP backward
 
@@ -595,7 +610,7 @@ class SimpleTrainer:
                     self.weight_optimizer.zero_grad()
 
                 # Use appropriate forward method based on model type
-                with autocast(enabled=self.use_amp):
+                with autocast(device_type=self.amp_device, enabled=self.use_amp):
                     if self.is_deeponet:
                         seq_outputs = self.model.forward_sequence(seq_inputs)  # [B, 1, 4000]
                     else:
@@ -627,10 +642,17 @@ class SimpleTrainer:
                 # Backward pass with AMP
                 if self.use_amp:
                     self.scaler.scale(final_loss).backward()
+                    # Gradient clipping (unscale first for AMP)
+                    if self.config.max_grad_norm > 0:
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                 else:
                     final_loss.backward()
+                    # Gradient clipping
+                    if self.config.max_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
                     self.optimizer.step()
                 self._update_adaptive_weights()
 
@@ -716,7 +738,7 @@ class SimpleTrainer:
                 per_ts_time_coords = per_timestep_batch['time_coord'].to(self.device)  # [B]
 
                 # Forward per-timestep with AMP
-                with autocast(enabled=self.use_amp):
+                with autocast(device_type=self.amp_device, enabled=self.use_amp):
                     per_ts_outputs = self.model.forward_per_timestep(per_ts_inputs, per_ts_time_coords)
                     per_ts_outputs = per_ts_outputs.squeeze(-1)  # [B, 1] → [B]
 
@@ -737,7 +759,7 @@ class SimpleTrainer:
                     sample_indices = None
 
                 # Forward sequence with AMP
-                with autocast(enabled=self.use_amp):
+                with autocast(device_type=self.amp_device, enabled=self.use_amp):
                     seq_outputs = self.model.forward_sequence(seq_inputs)  # [B, 1, 4000]
 
                     # Compute BSP loss (pass sample indices for cache lookup)
@@ -772,7 +794,7 @@ class SimpleTrainer:
                     sample_indices = None
 
                 # Forward pass with AMP (use appropriate method based on model type)
-                with autocast(enabled=self.use_amp):
+                with autocast(device_type=self.amp_device, enabled=self.use_amp):
                     if self.is_deeponet:
                         seq_outputs = self.model.forward_sequence(seq_inputs)  # [B, 1, 4000]
                     else:
