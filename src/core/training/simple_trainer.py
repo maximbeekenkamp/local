@@ -413,6 +413,11 @@ class SimpleTrainer:
         """
         self.model.train()
 
+        # Import loss classes for isinstance checks
+        from ..evaluation.loss_factory import CombinedLoss
+        from ..evaluation.binned_spectral_loss import BinnedSpectralLoss
+        from ..evaluation.adaptive_spectral_loss import SelfAdaptiveBSPLoss
+
         total_loss = 0.0
         total_mse_loss = 0.0
         total_bsp_loss = 0.0
@@ -517,10 +522,6 @@ class SimpleTrainer:
 
                 # Compute loss (pass sample indices for cache lookup if supported)
                 # For baseline MSE loss, don't pass sample_indices (PyTorch MSELoss doesn't accept it)
-                from ..evaluation.loss_factory import CombinedLoss
-                from ..evaluation.binned_spectral_loss import BinnedSpectralLoss
-                from ..evaluation.adaptive_spectral_loss import SelfAdaptiveBSPLoss
-
                 if isinstance(self.criterion, (CombinedLoss, BinnedSpectralLoss, SelfAdaptiveBSPLoss)):
                     loss = self.criterion(seq_outputs, seq_targets, sample_indices=sample_indices)
                 else:
@@ -591,6 +592,11 @@ class SimpleTrainer:
             - 'bsp_loss': Average BSP loss (DeepONet only)
         """
         self.model.eval()
+
+        # Import loss classes for isinstance checks
+        from ..evaluation.loss_factory import CombinedLoss
+        from ..evaluation.binned_spectral_loss import BinnedSpectralLoss
+        from ..evaluation.adaptive_spectral_loss import SelfAdaptiveBSPLoss
 
         total_loss = 0.0
         total_mse_loss = 0.0
@@ -681,10 +687,6 @@ class SimpleTrainer:
 
                 # Compute loss (pass sample indices for cache lookup if supported)
                 # For baseline MSE loss, don't pass sample_indices (PyTorch MSELoss doesn't accept it)
-                from ..evaluation.loss_factory import CombinedLoss
-                from ..evaluation.binned_spectral_loss import BinnedSpectralLoss
-                from ..evaluation.adaptive_spectral_loss import SelfAdaptiveBSPLoss
-
                 if isinstance(self.criterion, (CombinedLoss, BinnedSpectralLoss, SelfAdaptiveBSPLoss)):
                     loss = self.criterion(seq_outputs, seq_targets, sample_indices=sample_indices)
                 else:
