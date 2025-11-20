@@ -1138,7 +1138,8 @@ for LOSS_TYPE in loss_types_to_train:
     # ========================================================================
 
     # Create training config
-    optimizer_type = 'adam' if MODEL_ARCH == 'fno' else 'soap'
+    # Optimizer selection: Adam for DeepONet & FNO, SOAP for UNet
+    optimizer_type = 'soap' if MODEL_ARCH == 'unet' else 'adam'
 
     config = TrainingConfig(
         num_epochs=50,

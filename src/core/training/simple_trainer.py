@@ -648,7 +648,7 @@ class SimpleTrainer:
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
                     self.optimizer.step()
 
-                # Step scheduler
+                # Step scheduler (batch-wise for cosine annealing)
                 if self.config.scheduler_type == 'cosine':
                     self.scheduler.step()
 
