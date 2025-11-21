@@ -702,8 +702,6 @@ class SimpleTrainer:
         elif use_per_timestep_only:
             # DeepONet with baseline MSE (per-timestep only, no BSP)
             # Uses per-timestep loader with 320K samples for proper MSE training
-            print(f"  Using per-timestep-only mode for DeepONet baseline MSE")
-
             for batch_idx, per_timestep_batch in enumerate(self.per_timestep_train_loader):
                 # Extract per-timestep data
                 per_ts_inputs = per_timestep_batch['input'].to(self.device)      # [B, 4000]
