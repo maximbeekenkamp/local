@@ -108,7 +108,9 @@ class TrainingConfig:
     num_workers: int = 4
 
     # Mixed Precision Training
-    use_amp: bool = True  # Automatic mixed precision for ~50% memory reduction (epsilon=1e-6 for stability)
+    use_amp: bool = False  # Disabled by default due to numerical instability issues with FP16
+                            # Can cause NaN with large models (DeepONet 567K params)
+                            # Set to True if you have GPU memory constraints and stable training
 
     # Logging
     log_frequency: int = 10

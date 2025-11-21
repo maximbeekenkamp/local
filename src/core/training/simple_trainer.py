@@ -260,6 +260,83 @@ class SimpleTrainer:
             return isinstance(criterion.spectral_loss, SelfAdaptiveBSPLoss)
         return False
 
+    def _check_outputs_for_instability(
+        self,
+        outputs: torch.Tensor,
+        inputs: torch.Tensor,
+        epoch: int,
+        batch_idx: int
+    ) -> bool:
+        """
+        Check outputs for Inf/NaN before loss computation (early detection).
+
+        Args:
+            outputs: Model outputs to check
+            inputs: Model inputs for diagnostic info
+            epoch: Current epoch number
+            batch_idx: Current batch index
+
+        Returns:
+            True if instability detected, False otherwise
+        """
+        # Check for Inf (which becomes NaN after loss computation)
+        if torch.isinf(outputs).any():
+            self.console.print(f"\n[bold red]❌ Inf detected in model outputs![/bold red]")
+            self.console.print(f"  Epoch: {epoch}, Batch: {batch_idx}")
+            self.console.print(f"  Output range: [{outputs.min():.6e}, {outputs.max():.6e}]")
+            self.console.print(f"  Input range: [{inputs.min():.6e}, {inputs.max():.6e}]")
+
+            # Check if model parameters are corrupted
+            corrupt_params = []
+            for name, param in self.model.named_parameters():
+                if torch.isnan(param).any() or torch.isinf(param).any():
+                    corrupt_params.append(name)
+
+            if corrupt_params:
+                self.console.print(f"  [red]Corrupted parameters:[/red] {corrupt_params[:5]}")
+
+            self.console.print(f"\n[yellow]Likely causes:[/yellow]")
+            self.console.print(f"  1. Learning rate too high (current: {self.optimizer.param_groups[0]['lr']:.2e})")
+            self.console.print(f"  2. Model weights exploded from previous batches")
+            self.console.print(f"  3. Activation function instability (try 'tanh' instead of 'requ')")
+
+            return True
+
+        # Check for NaN in outputs
+        if torch.isnan(outputs).any():
+            self.console.print(f"\n[bold red]❌ NaN detected in model outputs![/bold red]")
+            self.console.print(f"  Epoch: {epoch}, Batch: {batch_idx}")
+            self.console.print(f"  This usually means model parameters were already corrupted")
+            return True
+
+        return False
+
+    def _check_model_parameters(self, epoch: int, batch_idx: int) -> bool:
+        """
+        Check model parameters for NaN/Inf corruption.
+
+        Args:
+            epoch: Current epoch number
+            batch_idx: Current batch index
+
+        Returns:
+            True if corruption detected, False otherwise
+        """
+        corrupt_params = []
+        for name, param in self.model.named_parameters():
+            if torch.isnan(param).any() or torch.isinf(param).any():
+                corrupt_params.append(name)
+
+        if corrupt_params:
+            self.console.print(f"\n[bold red]❌ Model parameters corrupted![/bold red]")
+            self.console.print(f"  Epoch: {epoch}, Batch: {batch_idx}")
+            self.console.print(f"  Corrupted parameters: {corrupt_params[:10]}")
+            self.console.print(f"\n[yellow]Recovery not possible - model weights are corrupted[/yellow]")
+            self.console.print(f"  Reduce learning rate and restart training from checkpoint")
+            return True
+
+        return False
+
     def _check_for_nan(self, loss: torch.Tensor, loss_name: str, epoch: int, batch_idx: int) -> bool:
         """
         Check if loss contains NaN and print diagnostic information.
@@ -513,6 +590,14 @@ class SimpleTrainer:
                     per_ts_outputs = self.model.forward_per_timestep(per_ts_inputs, per_ts_time_coords)
                     per_ts_outputs = per_ts_outputs.squeeze(-1)  # [B, 1] → [B]
 
+                    # EARLY CHECK: Detect Inf/NaN in outputs
+                    if self._check_outputs_for_instability(
+                        per_ts_outputs, per_ts_inputs, self.current_epoch, batch_idx
+                    ):
+                        raise RuntimeError(
+                            f"Model instability in per-timestep forward at epoch {self.current_epoch}, batch {batch_idx}"
+                        )
+
                     # Compute MSE loss (no penalty weighting - removed for consistency)
                     per_ts_loss = self.criterion(per_ts_outputs, per_ts_targets)
                     mse_loss = per_ts_loss.mean() if per_ts_loss.ndim > 0 else per_ts_loss
@@ -607,6 +692,13 @@ class SimpleTrainer:
                 total_bsp_loss += bsp_loss.item()
                 num_batches += 1
 
+                # PERIODIC CHECK: Check for parameter corruption every 10 batches
+                if batch_idx % 10 == 0 and batch_idx > 0:
+                    if self._check_model_parameters(self.current_epoch, batch_idx):
+                        raise RuntimeError(
+                            f"Model parameters corrupted at epoch {self.current_epoch}, batch {batch_idx}"
+                        )
+
         elif use_per_timestep_only:
             # DeepONet with baseline MSE (per-timestep only, no BSP)
             # Uses per-timestep loader with 320K samples for proper MSE training
@@ -626,11 +718,20 @@ class SimpleTrainer:
                     per_ts_outputs = self.model.forward_per_timestep(per_ts_inputs, per_ts_time_coords)
                     per_ts_outputs = per_ts_outputs.squeeze(-1)  # [B, 1] → [B]
 
+                    # EARLY CHECK: Detect Inf/NaN in outputs BEFORE loss computation
+                    if self._check_outputs_for_instability(
+                        per_ts_outputs, per_ts_inputs, self.current_epoch, batch_idx
+                    ):
+                        raise RuntimeError(
+                            f"Model instability detected at epoch {self.current_epoch}, batch {batch_idx}. "
+                            f"Outputs contain Inf/NaN. See diagnostics above."
+                        )
+
                     # Compute MSE loss
                     loss = self.criterion(per_ts_outputs, per_ts_targets)
                     final_loss = loss.mean() if loss.ndim > 0 else loss
 
-                # Check for NaN
+                # Check for NaN in loss (should be caught by output check above)
                 if self._check_for_nan(final_loss, 'per_timestep_mse_loss', self.current_epoch, batch_idx):
                     raise RuntimeError(f"NaN detected in per-timestep MSE loss at epoch {self.current_epoch}, batch {batch_idx}")
 
@@ -657,6 +758,14 @@ class SimpleTrainer:
                 total_mse_loss += final_loss.item()
                 total_bsp_loss += 0.0  # No BSP component
                 num_batches += 1
+
+                # PERIODIC CHECK: Check for parameter corruption every 10 batches
+                if batch_idx % 10 == 0 and batch_idx > 0:
+                    if self._check_model_parameters(self.current_epoch, batch_idx):
+                        raise RuntimeError(
+                            f"Model parameters corrupted at epoch {self.current_epoch}, batch {batch_idx}. "
+                            f"Reduce learning rate and restart from checkpoint."
+                        )
 
         else:
             # FNO/UNet sequence-only training OR DeepONet with sequence-based losses (BSP only)
